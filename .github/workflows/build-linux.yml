@@ -1,0 +1,42 @@
+name: Build Dynamons 2 (Linux x64)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build Unity player
+        uses: game-ci/unity-builder@eb1b9fba120c6e62c9fb7a7a81d6c107ce004c45 # v6.0.0
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          targetPlatform: StandaloneLinux64
+          buildName: Dynamons2
+          buildsPath: build
+          versioning: None
+
+      - name: Package the Linux player
+        run: |
+          test -x build/StandaloneLinux64/Dynamons2.x86_64
+          tar -C build/StandaloneLinux64 -czf Dynamons2-linux-x64.tar.gz .
+
+      - name: Upload the build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Dynamons2-linux-x64
+          path: Dynamons2-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
