@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEngine;
 
 namespace Dynamons
@@ -219,6 +220,13 @@ namespace Dynamons
             {
                 Check(Resources.Load<Texture2D>(texPath) != null, "Required texture asset loads: " + texPath);
             }
+
+            DynamonsBuildSettings.Apply();
+            Check(PlayerSettings.productName == "Dynamons Next", "Build productName must be Dynamons Next");
+            Check(PlayerSettings.GetApplicationIdentifier(NamedBuildTarget.Android) == "com.dynamons.game",
+                "Android applicationIdentifier must be com.dynamons.game");
+            Check(!PlayerSettings.SplashScreen.show, "Unity SplashScreen must be disabled");
+            Check(PlayerSettings.Android.targetArchitectures == AndroidArchitecture.ARM64, "Android target must be ARM64");
 
             Debug.Log("Dynamons rules & parity checks passed.");
         }

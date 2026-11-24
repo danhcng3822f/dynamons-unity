@@ -243,17 +243,17 @@ function checkFontDesignRulesAndDtoConstraints() {
   }
 
   const buildSettingsTxt = readFileSync(join(assetsDir, 'Editor', 'DynamonsBuildSettings.cs'), 'utf8');
-  assert.ok(buildSettingsTxt.includes('"Dynamons Next"'), 'DynamonsBuildSettings.cs must set productName to Dynamons Next');
+  assert.ok(buildSettingsTxt.includes('PlayerSettings.productName = "Dynamons Next"'), 'DynamonsBuildSettings.cs must set productName = "Dynamons Next" unconditionally');
+  assert.ok(buildSettingsTxt.includes('SetApplicationIdentifier(NamedBuildTarget.Android, "com.dynamons.game")'), 'DynamonsBuildSettings.cs must set Android applicationIdentifier to com.dynamons.game');
   assert.ok(buildSettingsTxt.includes('PlayerSettings.SplashScreen.show = false'), 'DynamonsBuildSettings.cs must disable Unity SplashScreen');
   assert.ok(assetExists('splash/app_icon', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/app_icon.png');
   assert.ok(assetExists('splash/logo', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/logo.png');
 
-  for (const wf of ['build-linux.yml', 'build-android.yml']) {
-    const wfTxt = readFileSync(join(unityDir, '.github', 'workflows', wf), 'utf8');
-    assert.ok(/contents:\s*write/.test(wfTxt), `${wf} must request contents: write for GitHub Releases`);
-    assert.ok(wfTxt.includes('gh release upload'), `${wf} must auto-upload build artifact to GitHub Release`);
-    assert.ok(wfTxt.includes('DynamonsNext'), `${wf} must build DynamonsNext artifacts`);
-  }
+  const releaseWf = readFileSync(join(unityDir, '.github', 'workflows', 'build-release.yml'), 'utf8');
+  assert.ok(/contents:\s*write/.test(releaseWf), 'build-release.yml must request contents: write for GitHub Releases');
+  assert.ok(releaseWf.includes('gh release create') && releaseWf.includes('--latest'), 'build-release.yml must create a new versioned GitHub Release per build');
+  assert.ok(!releaseWf.includes('TAG="latest"'), 'build-release.yml must not overwrite a single mutable latest tag');
+  assert.ok(releaseWf.includes('DynamonsNext-android-arm64.apk') && releaseWf.includes('DynamonsNext-linux-x64.tar.gz'), 'build-release.yml must publish both Android APK and Linux tarball');
 
   for (const dtoFile of [join(assetsDir, 'Scripts', 'Core', 'GameData.cs'), join(assetsDir, 'Scripts', 'Core', 'SaveData.cs')]) {
     const txt = readFileSync(dtoFile, 'utf8');

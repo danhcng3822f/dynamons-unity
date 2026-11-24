@@ -1,0 +1,148 @@
+name: Build & Release Dynamons Next
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/unity-web-visual-parity
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build Unity player (Linux x64)
+        uses: game-ci/unity-builder@eb1b9fba120c6e62c9fb7a7a81d6c107ce004c45 # v6.0.0
+        env:
+          # Omit UNITY_LICENSE so Unity 6 uses entitlement-based personal activation
+          # rather than Hub .ulf file activation (which fails with Code 400 TimeStamp validation failed).
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          targetPlatform: StandaloneLinux64
+          cliVersion: v0.1.77
+          buildName: DynamonsNext
+          buildsPath: build
+          versioning: None
+
+      - name: Verify and package Linux x64 player
+        run: |
+          test -x build/StandaloneLinux64/DynamonsNext.x86_64
+          test -f build/StandaloneLinux64/DynamonsNext_Data/il2cpp_data/Metadata/global-metadata.dat
+          find build/StandaloneLinux64 -name 'GameAssembly.so' -print -quit | grep -q .
+          test ! -d build/StandaloneLinux64/DynamonsNext_Data/MonoBleedingEdge
+          grep -qa 'Dynamons Next' build/StandaloneLinux64/DynamonsNext_Data/globalgamemanagers
+          tar -C build/StandaloneLinux64 -czf DynamonsNext-linux-x64.tar.gz .
+
+      - name: Upload Linux build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: DynamonsNext-linux-x64
+          path: DynamonsNext-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  build-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build Android APK (IL2CPP arm64-v8a)
+        uses: game-ci/unity-builder@eb1b9fba120c6e62c9fb7a7a81d6c107ce004c45 # v6.0.0
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          targetPlatform: Android
+          cliVersion: v0.1.77
+          buildName: DynamonsNext
+          buildsPath: build
+          versioning: None
+          androidExportType: androidPackage
+          androidSymbolType: none
+
+      - name: Verify Android APK (arm64-v8a & branding)
+        run: |
+          test -f build/Android/DynamonsNext.apk
+          unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/arm64-v8a/libil2cpp.so'
+          ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/armeabi-v7a/'
+          ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/x86'
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('build/Android/DynamonsNext.apk') as z:
+              man = z.read('AndroidManifest.xml')
+              arsc = z.read('resources.arsc')
+              ggm = z.read('assets/bin/Data/globalgamemanagers')
+              man_text = man + man.replace(b'\x00', b'')
+              arsc_text = arsc + arsc.replace(b'\x00', b'')
+              assert b'com.dynamons.game' in man_text, 'Missing com.dynamons.game in AndroidManifest.xml'
+              assert b'com.Dynamons.workspace' not in man_text, 'Unexpected workspace package ID'
+              assert b'Dynamons Next' in arsc_text, 'Missing Dynamons Next app name in resources.arsc'
+              assert b'Dynamons Next' in ggm, 'Missing Dynamons Next productName in globalgamemanagers'
+          PY
+          cp build/Android/DynamonsNext.apk DynamonsNext-android-arm64.apk
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: DynamonsNext-android-arm64
+          path: DynamonsNext-android-arm64.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    needs: [build-linux, build-android]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download Linux build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: DynamonsNext-linux-x64
+
+      - name: Download Android APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: DynamonsNext-android-arm64
+
+      - name: Publish versioned GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -f DynamonsNext-linux-x64.tar.gz
+          test -f DynamonsNext-android-arm64.apk
+          TAG="v1.0.${GITHUB_RUN_NUMBER}"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+             gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            TAG="v1.0.${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          fi
+          COMMIT_MSG=$(git log -1 --pretty=%s "$GITHUB_SHA" 2>/dev/null || echo "Automated build")
+          TITLE="Dynamons Next ${TAG} (${GITHUB_SHA::7})"
+          NOTES=$(printf 'Automated IL2CPP builds for commit `%s`.\n\n- **Commit**: %s\n- **Android**: `DynamonsNext-android-arm64.apk` (arm64-v8a IL2CPP)\n- **Linux**: `DynamonsNext-linux-x64.tar.gz` (x64 IL2CPP)' "${GITHUB_SHA::7}" "$COMMIT_MSG")
+          gh release create "$TAG" \
+            DynamonsNext-android-arm64.apk \
+            DynamonsNext-linux-x64.tar.gz \
+            -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes "$NOTES" \
+            --generate-notes \
+            --latest
