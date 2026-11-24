@@ -663,6 +663,26 @@ namespace Dynamons
             ui.Art(page, "session/mon_shadow", 174f, 240f, 110f, 26f, true, 0.65f);
             ui.Art(page, GameUi.Mon(mon.MonId, "front"), 166f, 116f, 126f, 142f, true);
 
+            if (GameData.HasPassive(info?.passive))
+            {
+                var p = info.passive;
+                string pKey = GameData.PassiveKey(p);
+                var (pBg, pAccent, pBorder) = HudWidgets.PassivePalette(pKey, false, pKey == "charge");
+                const float cardX = 10f, cardY = 322f, cardW = 300f, cardH = 54f;
+                var pVec = VectorCanvas.Create("MonPassiveCardVec", page, cardX, cardY, cardW, cardH);
+                pVec.FillRoundRect(0f, 0f, cardW, cardH, 10f, pBg);
+                pVec.FillRect(4f, 2f, cardW - 8f, 3f, new Color(pAccent.r, pAccent.g, pAccent.b, 0.35f));
+                pVec.StrokeRoundRect(1f, 1f, cardW - 2f, cardH - 2f, 9f, pBorder, 1.8f);
+                pVec.FillCircle(26f, cardH * 0.5f, 15f, GameUi.HexColor("#0c081c", 0.65f));
+                pVec.StrokeCircle(26f, cardH * 0.5f, 15f, new Color(pAccent.r, pAccent.g, pAccent.b, 0.75f), 1.4f, 0f, Mathf.PI * 2f, 16);
+                HudWidgets.DrawPassiveEmblem(pVec, pKey, 26f, cardH * 0.5f, 8.5f, pAccent, pBg);
+                pVec.Commit();
+
+                fonts.Draw(page, "white_stroked_small", GameData.PassiveTitle(p), cardX + 48f, cardY + 8f, 9.5f, "left", pAccent, 185f);
+                fonts.Draw(page, "white_stroked_small", "PASSIVE", cardX + cardW - 10f, cardY + 8f, 7.5f, "right", GameUi.HexColor("#e2dcff"));
+                fonts.DrawLines(page, "white_small", GameData.PassiveDesc(p), cardX + 48f, cardY + 23f, 8f, cardW - 58f, 11f, "left");
+            }
+
             HudWidgets.DrawStatsPane(ui, fonts, page, stats, 5f, 384f);
 
             var allSkills = (info?.abilities ?? Array.Empty<MoveSlot>()).Take(8).ToArray();

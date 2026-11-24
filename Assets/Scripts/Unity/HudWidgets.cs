@@ -226,5 +226,70 @@ namespace Dynamons
                 fonts.Draw(parent, "white_stroked_small", val.ToString(), x + 126f, rowY + 17f, 9f, "left");
             }
         }
+
+        public static (Color bg, Color accent, Color border) PassivePalette(string key, bool asleep = false, bool depleted = false)
+        {
+            switch (key)
+            {
+                case "shield":
+                    if (depleted) return (GameUi.HexColor("#172330", 0.96f), GameUi.HexColor("#7f97ad"), GameUi.HexColor("#566d85", 0.96f));
+                    return (GameUi.HexColor("#082947", 0.96f), GameUi.HexColor("#4cebff"),
+                        GameUi.HexColor(asleep ? "#567494" : "#3ee7ff", 0.96f));
+                case "ramp":
+                    return (GameUi.HexColor("#381107", 0.96f), GameUi.HexColor("#ff9b3d"),
+                        GameUi.HexColor(asleep ? "#7c4928" : "#ff7b29", 0.96f));
+                case "charge":
+                    return (GameUi.HexColor(depleted ? "#1c3d09" : "#0b2b18", 0.96f),
+                        GameUi.HexColor(depleted ? "#ffe052" : "#5ce674"),
+                        GameUi.HexColor(asleep ? "#426e52" : (depleted ? "#ffd447" : "#4cd964"), 0.96f));
+                default:
+                    return (GameUi.HexColor("#1a0a36", 0.96f), GameUi.HexColor("#d18cff"),
+                        GameUi.HexColor(asleep ? "#6d5c8c" : "#c06eff", 0.96f));
+            }
+        }
+
+        public static void DrawPassiveEmblem(VectorCanvas vec, string key, float cx, float cy, float radius, Color accent, Color inner)
+        {
+            if (vec == null) return;
+            if (key == "shield")
+            {
+                var pts = new[]
+                {
+                    new Vector2(cx, cy - radius),
+                    new Vector2(cx + radius * 0.85f, cy - radius * 0.45f),
+                    new Vector2(cx + radius * 0.72f, cy + radius * 0.45f),
+                    new Vector2(cx, cy + radius),
+                    new Vector2(cx - radius * 0.72f, cy + radius * 0.45f),
+                    new Vector2(cx - radius * 0.85f, cy - radius * 0.45f),
+                };
+                vec.FillPoly(pts, new Color(inner.r, inner.g, inner.b, 0.95f));
+                vec.StrokePoly(pts, accent, 1.5f, true);
+            }
+            else if (key == "ramp")
+            {
+                var flame = new[]
+                {
+                    new Vector2(cx, cy - radius),
+                    new Vector2(cx + radius * 0.8f, cy + radius * 0.1f),
+                    new Vector2(cx, cy + radius),
+                    new Vector2(cx - radius * 0.8f, cy + radius * 0.1f),
+                };
+                vec.FillPoly(flame, accent);
+                vec.FillCircle(cx, cy + radius * 0.12f, radius * 0.34f, GameUi.HexColor("#fff099"));
+            }
+            else if (key == "charge")
+            {
+                vec.FillCircle(cx, cy, radius * 0.56f, accent);
+                vec.StrokeCircle(cx, cy, radius * 0.92f, new Color(accent.r, accent.g, accent.b, 0.65f), 1.3f, 0f, Mathf.PI * 2f, 12);
+                vec.FillCircle(cx - radius * 0.68f, cy - radius * 0.55f, radius * 0.22f, GameUi.HexColor("#eaff9c"));
+                vec.FillCircle(cx + radius * 0.68f, cy - radius * 0.55f, radius * 0.22f, GameUi.HexColor("#eaff9c"));
+            }
+            else
+            {
+                vec.FillCircle(cx, cy, radius * 0.75f, new Color(accent.r * 0.45f, accent.g * 0.35f, accent.b * 0.75f, 0.95f));
+                vec.StrokeCircle(cx, cy, radius * 0.88f, accent, 1.5f, 0f, Mathf.PI * 2f, 14);
+                vec.FillCircle(cx, cy, radius * 0.32f, GameUi.HexColor("#f0dcff"));
+            }
+        }
     }
 }

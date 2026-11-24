@@ -170,6 +170,32 @@ namespace Dynamons
             var catchEvs = catchBattle.Apply(new BattleAction("catch"), catchBag);
             Check(catchEvs.Any(e => e.Type == "catch" && e.Success), "Catch event Success flag populated");
 
+            var unnormalized = JsonUtility.FromJson<GameData>(asset.text);
+            unnormalized.Normalize();
+            Check(unnormalized.Mon("krimson").passive == null && unnormalized.Mon("leafrog").passive == null,
+                "Normalize clears empty JsonUtility Passive stubs on species without passives");
+            Check(GameData.HasPassive(unnormalized.Mon("hyperbug").passive) && GameData.PassiveKey(unnormalized.Mon("hyperbug").passive) == "void",
+                "Hyperbug passive preserved with explicit void key even when type is empty");
+            foreach (var pMonId in new[] { "squirtle", "charmander", "bulbasaur", "hyperbug" })
+            {
+                var p = unnormalized.Mon(pMonId).passive;
+                Check(GameData.HasPassive(p) && !string.IsNullOrEmpty(GameData.PassiveTitle(p)) && !string.IsNullOrEmpty(GameData.PassiveDesc(p)),
+                    "Passive UI title & description populated for " + pMonId);
+            }
+            var plainCheck = new BattleRules(JsonUtility.FromJson<GameData>(asset.text),
+                new Encounter { Kind = "wild", Members = new[] { new MemberSpec { MonId = "leafrog", Level = 4 } } },
+                new[] { OwnedMon.New("krimson", 4, 100) }, () => 0.0);
+            Check(plainCheck.Player.Passive == null && plainCheck.Enemy.Passive == null,
+                "BattleRules strips empty JsonUtility Passive objects cleanly");
+
+            var mixedMissBattle = new BattleRules(data,
+                new Encounter { Kind = "wild", Members = new[] { new MemberSpec { MonId = "kobalt", Level = 14 } } },
+                new[] { OwnedMon.New("charmander", 14, 100) }, () => 0.0);
+            mixedMissBattle.Player.Base.aim = 10;
+            var mixedEvs = mixedMissBattle.Apply(new BattleAction("ability", "flare_burst"));
+            Check(mixedEvs.Any(e => e.Type == "miss" && e.Missed), "Mixed missable attack emits explicit miss event when missed");
+            Check(mixedMissBattle.Enemy.Hp == mixedMissBattle.Enemy.MaxHp, "Missed mixed attack deals no damage to foe");
+
             foreach (var texPath in new[]
             {
                 "Dynamons/Art/general/huds/pane_big_fire", "Dynamons/Art/session/abilities/fx/blast",

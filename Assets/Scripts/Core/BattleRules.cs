@@ -78,9 +78,10 @@ namespace Dynamons
             var basis = spec.Stats ?? data.StatsAt(mon.id, spec.Level, !spec.Sparring);
             if (spec.Sparring) basis.def = Math.Min(46, basis.def);
             int max = spec.MaxHp > 0 ? spec.MaxHp : data.battleData.maxHP;
+            var passive = GameData.HasPassive(mon.passive) ? mon.passive : null;
             return new Combatant { Id = id, MonId = mon.id, Kind = mon.kind, Level = spec.Level, Base = basis,
                 MaxHp = max, Hp = GameData.Clamp(hp ?? max, 0, max), Xp = xp, Sparring = spec.Sparring, DamageCap = spec.DamageCap,
-                StatCap = spec.StatCap, Passive = mon.passive, Shield = mon.passive?.type == "shield" ? Math.Max(1, mon.passive.shieldHits) : 0,
+                StatCap = spec.StatCap, Passive = passive, Shield = passive?.type == "shield" ? Math.Max(1, passive.shieldHits) : 0,
                 Moves = data.MovesAt(mon.id, spec.Level) };
         }
 

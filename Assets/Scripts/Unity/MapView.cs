@@ -18,7 +18,7 @@ namespace Dynamons
         private Dictionary<int, Encounter> cachedMapRolls;
         private Coroutine walkRoutine;
         private float mapOffset, minOffset, arenaFlashTimer;
-        private bool walking, mapUserDragged;
+        private bool walking;
         private Vector2 avatarLogicalPos;
         private int mapAdvance = 1;
 
@@ -35,7 +35,6 @@ namespace Dynamons
             walkRoutine = null;
             arenaFlashTimer = 0f;
             walking = false;
-            mapUserDragged = false;
         }
 
         private void UpdateMapAnimations()
@@ -76,7 +75,7 @@ namespace Dynamons
             mapDrag.Frame = ui.Frame;
             mapDrag.Move = delta =>
             {
-                if (overlay == null) { mapUserDragged = true; Pan(mapOffset + delta); }
+                if (overlay == null) Pan(mapOffset + delta);
             };
             GameUi.Fill(mapLayer, GameUi.HexColor("#56bcd4"), -75f, 0f, 1430f, GameUi.Height, true);
 
@@ -366,7 +365,6 @@ namespace Dynamons
 
             bool wasWalking = walking;
             if (walkRoutine != null) { StopCoroutine(walkRoutine); walkRoutine = null; }
-            mapUserDragged = false;
 
             var unlockedList = flow.World.Available(save).ToArray();
             var unlocked = new HashSet<int>(unlockedList.Select(n => n.id)) { node.id };
@@ -421,16 +419,6 @@ namespace Dynamons
                     float bob = -Mathf.Abs(Mathf.Sin(walkClock * 22f)) * 4f;
                     float tiltDeg = Mathf.Sin(walkClock * 22f) * 8.6f;
                     PlaceMapAvatar(avatarLogicalPos.x, avatarLogicalPos.y, bob, tiltDeg);
-
-                    if (!mapUserDragged)
-                    {
-                        float screenX = mapOffset + avatarLogicalPos.x;
-                        if (screenX < 72f || screenX > GameUi.Width - 72f)
-                        {
-                            float targetOff = Mathf.Clamp(GameUi.Width * 0.5f - avatarLogicalPos.x, minOffset, 0f);
-                            Pan(Mathf.Lerp(mapOffset, targetOff, Mathf.Clamp01(dt * 8f)));
-                        }
-                    }
                     yield return null;
                 }
             }

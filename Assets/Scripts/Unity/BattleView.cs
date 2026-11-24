@@ -18,7 +18,7 @@ namespace Dynamons
             Id = c.Id, MonId = c.MonId, Level = c.Level, Hp = c.Hp, MaxHp = c.MaxHp,
             Status = c.Status, Rage = c.Rage, Mega = c.Mega, Shield = c.Shield,
             VoidStacks = c.VoidStacks, PowerStacks = c.PowerStacks, Charges = c.Charges,
-            Passive = c.Passive, Moves = c.Moves,
+            Passive = GameData.HasPassive(c.Passive) ? c.Passive : null, Moves = c.Moves,
         };
     }
 
@@ -44,7 +44,7 @@ namespace Dynamons
 
         private BattleEvent[] battleEvents = Array.Empty<BattleEvent>();
         private int battleEventIndex;
-        private float battleEventTimer, battleTimeMs, battleLogTimer;
+        private float battleEventTimer, battleTimeMs, battleLogTimer, battleTurnPauseMs;
         private string battleLog = string.Empty;
         private float trayStartX = GameUi.Width - 4f * 59f;
 
@@ -53,9 +53,9 @@ namespace Dynamons
         private readonly List<(float x, float y, float w, float h, float phase, bool strongGlow)> rainbowTargets =
             new List<(float, float, float, float, float, bool)>();
         private string modalSelectedItemId;
-        private int modalItemPage;
-        private bool modalPickingStoneTarget;
-        private string modalStoneId;
+        private int modalItemPage, modalItemFilter;
+        private bool modalPickingStoneTarget, enemyTurnPauseDone;
+        private string modalStoneId, passiveInspectSide;
 
         private static BattleBox PositionBox(string side) => side == "enemy"
             ? new BattleBox(174f, 151f, 132f, 150f, 240f, 301f)
@@ -68,6 +68,10 @@ namespace Dynamons
             battleEventStarted = false;
             battleMoreOpen = false;
             battleForcedSwap = false;
+            battleTurnPauseMs = 0f;
+            enemyTurnPauseDone = false;
+            modalItemFilter = 0;
+            passiveInspectSide = null;
             battleEvents = Array.Empty<BattleEvent>();
             feedbacks.Clear();
             rainbowTargets.Clear();
@@ -172,6 +176,8 @@ namespace Dynamons
                     {
                         battleWaiting = false;
                         battleEventStarted = false;
+                        battleTurnPauseMs = 0f;
+                        enemyTurnPauseDone = false;
                         battleEvents = Array.Empty<BattleEvent>();
                         SnapshotBattleView();
                         if (battle.Outcome != null)
@@ -186,6 +192,19 @@ namespace Dynamons
                         break;
                     }
                     var ev = battleEvents[battleEventIndex];
+                    if (!battleEventStarted && !enemyTurnPauseDone && battleEventIndex > 0 &&
+                        ev.Side == "enemy" && (ev.Type == "ability" || ev.Type == "mega" || ev.Type == "sleep"))
+                    {
+                        enemyTurnPauseDone = true;
+                        battleTurnPauseMs = 320f;
+                    }
+                    if (battleTurnPauseMs > 0f)
+                    {
+                        float consume = Mathf.Min(battleTurnPauseMs, battleEventTimer);
+                        battleTurnPauseMs -= consume;
+                        battleEventTimer -= consume;
+                        if (battleTurnPauseMs > 0f) break;
+                    }
                     if (!battleEventStarted) { battleEventStarted = true; BeginBattleEvent(ev); }
                     float dur = BattleEventDuration(ev);
                     if (battleEventTimer < dur) break;
@@ -210,11 +229,16 @@ namespace Dynamons
                     return Mathf.Clamp(Mathf.Round(rawTotal * 0.65f), 480f, 950f);
                 }
                 case "damage": return 300f;
+                case "miss": return 760f;
+                case "hypno": return 560f;
                 case "faint": return 320f;
                 case "immune": return 680f;
                 case "stat": return 450f;
+                case "heal": return 460f;
+                case "status": return 460f;
+                case "rage": return 460f;
                 case "passive": return ev.Ready ? 360f : 180f;
-                case "sleep":
+                case "sleep": return 620f;
                 case "wake": return 450f;
                 case "catch": return 900f;
                 case "mega": return 950f;
@@ -230,7 +254,8 @@ namespace Dynamons
         {
             if (ev == null || string.IsNullOrEmpty(ev.Target)) return;
             bool drawable = ev.Type == "critical" || ev.Type == "strong" || ev.Type == "weak" || ev.Type == "hypno" ||
-                            ev.Type == "rage" || (ev.Type == "status" && ev.Status == "sick") || ev.Type == "immune" ||
+                            ev.Type == "rage" || ev.Type == "miss" || ev.Type == "sleep" ||
+                            (ev.Type == "status" && ev.Status == "sick") || ev.Type == "immune" ||
                             ev.Type == "damage" || ev.Type == "heal" || (ev.Type == "stat" && !string.IsNullOrEmpty(ev.Stat));
             if (!drawable || feedbacks.Any(f => ReferenceEquals(f.Source, ev))) return;
             feedbacks.Add(new FeedbackEntry { Source = ev, Elapsed = 0f, Duration = duration });
@@ -250,6 +275,23 @@ namespace Dynamons
                 else ui.Sound(steps.Any(s => s.action.StartsWith("can_", StringComparison.Ordinal)) ? "canned_powerup" : "attack_scratch", save);
                 if (!string.IsNullOrEmpty(ev.Text)) LogBattleBanner(ev.Text.ToUpperInvariant());
             }
+            else if (ev.Type == "miss")
+            {
+                LogBattleBanner("MISSED!");
+                bool playedSfx = battleEventIndex > 0 && battleEvents[battleEventIndex - 1].Type == "ability" && battleEvents[battleEventIndex - 1].Missed;
+                if (!playedSfx) ui.Sound("attack_miss", save);
+                PushFeedback(ev, 760f);
+            }
+            else if (ev.Type == "hypno") { LogBattleBanner("HYPNO BACKFIRE!"); ui.Sound("hypno", save); PushFeedback(ev, 560f); }
+            else if (ev.Type == "heal") { LogBattleBanner($"HEALED {ev.Amount} HP"); ui.Sound("use_healing_kit", save); PushFeedback(ev, 460f); }
+            else if (ev.Type == "antidote") LogBattleBanner("STATUS RESTORED!");
+            else if (ev.Type == "rage") { LogBattleBanner("RAGE!"); ui.Sound("attack_enrage", save); PushFeedback(ev, 460f); }
+            else if (ev.Type == "status")
+            {
+                LogBattleBanner(ev.Status == "sick" ? "SICK!" : ev.Status == "sleep" ? "ASLEEP!" : "HYPNO!");
+                ui.Sound(ev.Status == "sick" ? "sick" : "hypno", save);
+                PushFeedback(ev, 460f);
+            }
             else if (ev.Type == "catch") ui.Sound(ev.Success ? "catch_success" : "catch_failure", save);
             else if (ev.Type == "faint") ui.Sound("faint", save);
             else if (ev.Type == "mega") { ui.Sound("level_up_animation", save); LogBattleBanner("MEGA EVOLUTION! 30% POWER UP!"); }
@@ -257,6 +299,7 @@ namespace Dynamons
             {
                 if (ev.Variant == "shield") { LogBattleBanner("SHELL SHIELD SHATTERED!"); ui.Sound("attack_iceberg", save); }
                 else { LogBattleBanner($"VOID IMMUNE! DMG UP {ev.BonusPct}%"); ui.Sound("attack_miss", save); }
+                PushFeedback(ev, 680f);
             }
             else if (ev.Type == "critical") { LogBattleBanner("CRITICAL HIT!"); ui.Sound("critical_hit", save); PushFeedback(ev, 560f); }
             else if (ev.Type == "strong") { LogBattleBanner("SUPER EFFECTIVE!"); PushFeedback(ev, 560f); }
@@ -273,7 +316,7 @@ namespace Dynamons
                 LogBattleBanner($"{title.ToUpperInvariant()} READY!");
                 ui.Sound("stat_raised", save);
             }
-            else if (ev.Type == "sleep") LogBattleBanner("FAST ASLEEP!");
+            else if (ev.Type == "sleep") { LogBattleBanner("FAST ASLEEP!"); PushFeedback(ev, 620f); }
             else if (ev.Type == "wake") { LogBattleBanner("WOKE UP!"); ui.Sound("stat_raised", save); }
         }
 
@@ -301,18 +344,8 @@ namespace Dynamons
                 if (idx >= 0) { if (ev.Side == "enemy") viewActiveEnemy = idx; else viewActivePlayer = idx; }
             }
             PushFeedback(ev, ev.Type == "damage" ? 450f : ev.Type == "stat" ? 620f : 560f);
-            if (ev.Type == "miss") LogBattleBanner("MISSED!");
-            else if (ev.Type == "status")
-            {
-                LogBattleBanner(ev.Status == "sick" ? "SICK!" : ev.Status == "sleep" ? "ASLEEP!" : "HYPNO!");
-                ui.Sound(ev.Status == "sick" ? "sick" : "hypno", save);
-            }
-            else if (ev.Type == "heal") { LogBattleBanner($"HEALED {ev.Amount} HP"); ui.Sound("use_healing_kit", save); }
-            else if (ev.Type == "faint") LogBattleBanner("FAINTED!");
+            if (ev.Type == "faint") LogBattleBanner("FAINTED!");
             else if (ev.Type == "catch") LogBattleBanner(ev.Success ? "CAUGHT!" : "IT BROKE FREE!");
-            else if (ev.Type == "antidote") LogBattleBanner("STATUS RESTORED!");
-            else if (ev.Type == "hypno") { LogBattleBanner("HYPNO BACKFIRE!"); ui.Sound("hypno", save); }
-            else if (ev.Type == "rage") { LogBattleBanner("RAGE!"); ui.Sound("attack_enrage", save); }
             else if (ev.Type == "mega") LogBattleBanner("MEGA POWER UP 30%!");
             else if (ev.Type == "escape") LogBattleBanner("GOT AWAY!");
         }
@@ -329,6 +362,7 @@ namespace Dynamons
 
             battleMoreOpen = false;
             battleForcedSwap = false;
+            passiveInspectSide = null;
             GameUi.Clear(itemsModalLayer);
 
             pendingBattleLoot = battle.Outcome == null ? Array.Empty<Reward>() : flow.CommitBattle(battle, DateTime.Today);
@@ -338,6 +372,8 @@ namespace Dynamons
             battleEvents = steps;
             battleEventIndex = 0;
             battleEventTimer = 0f;
+            battleTurnPauseMs = 0f;
+            enemyTurnPauseDone = false;
             battleEventStarted = false;
             battleWaiting = true;
             RebuildBattleControls();
@@ -432,6 +468,16 @@ namespace Dynamons
                 () => BattleClick(new BattleAction("mega")), interactive && megaReady, megaActive ? 1f : (interactive && megaReady ? 1f : 0.45f));
             if (megaActive || (megaReady && interactive))
                 rainbowTargets.Add((8f, 441f, 54f, 54f, 0f, megaActive));
+
+            if (interactive)
+            {
+                var curFoe = viewActiveEnemy < viewEnemy.Count ? viewEnemy[viewActiveEnemy] : null;
+                var curPlayer = viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null;
+                if (GameData.HasPassive(curFoe?.Passive))
+                    ui.HitBox(controlsLayer, 158f, 68f, 112f, 22f, () => OpenPassiveInspect("enemy"));
+                if (GameData.HasPassive(curPlayer?.Passive))
+                    ui.HitBox(controlsLayer, 214f, 419f, 101f, 20f, () => OpenPassiveInspect("player"));
+            }
 
             var moves = (actor.Moves ?? Array.Empty<MoveData>()).Take(5).ToArray();
             bool compact = moves.Length >= 5;
@@ -599,7 +645,7 @@ namespace Dynamons
                 HudWidgets.DrawMonPane(ui, fonts, data, hpHudLayer,
                     new MonHudView { MonId = foe.MonId, Level = foe.Level, Hp = foe.Hp, MaxHp = foe.MaxHp, Status = foe.Status, Rage = foe.Rage },
                     "big", 5f, 68f, hpTrail.TryGetValue(foe.Id, out float tr) ? tr : (float?)null, showHpText: true);
-                if (foe.Passive != null) DrawPassivePill(hudVec, hpHudLayer, foe, 158f, 70f, 94f, 16f);
+                if (GameData.HasPassive(foe.Passive)) DrawPassivePill(hudVec, hpHudLayer, foe, 158f, 68f, 112f, 22f);
             }
             if (player != null)
             {
@@ -608,11 +654,11 @@ namespace Dynamons
                     "big", 165f, 443f, hpTrail.TryGetValue(player.Id, out float tr) ? tr : (float?)null, showHpText: true);
                 if (player.Mega)
                 {
-                    hudVec.FillRoundRect(166f, 425f, 48f, 16f, 6f, GameUi.HexColor("#1f1047", 0.92f));
-                    rainbowBorderVec.DrawRainbowBorder(166f, 425f, 48f, 16f, battleTimeMs, 2f, 6f, false);
-                    fonts.Draw(hpHudLayer, "white_stroked_small", "MEGA", 190f, 429f, 8f, "center");
+                    hudVec.FillRoundRect(165f, 419f, 46f, 20f, 6f, GameUi.HexColor("#1f1047", 0.94f));
+                    rainbowBorderVec.DrawRainbowBorder(165f, 419f, 46f, 20f, battleTimeMs, 2f, 6f, false);
+                    fonts.Draw(hpHudLayer, "white_stroked_small", "MEGA", 188f, 424f, 8f, "center");
                 }
-                if (player.Passive != null) DrawPassivePill(hudVec, hpHudLayer, player, 217f, 425f, 98f, 16f);
+                if (GameData.HasPassive(player.Passive)) DrawPassivePill(hudVec, hpHudLayer, player, 214f, 419f, 101f, 20f);
             }
 
             if (battle.Encounter.Kind != "wild" && !string.IsNullOrEmpty(battle.Encounter.Captain))
@@ -656,6 +702,11 @@ namespace Dynamons
                 if (activeEv.Side != side && steps.Any(s => s.action.StartsWith("evade", StringComparison.Ordinal)))
                     x += (side == "enemy" ? 28f : -28f) * Mathf.Sin(p * Mathf.PI);
             }
+            if (activeEv?.Type == "miss" && mon.Id == activeEv.Target)
+            {
+                float p = Mathf.Clamp01(battleEventTimer / Mathf.Max(1f, BattleEventDuration(activeEv)));
+                x += Mathf.Sin(p * Mathf.PI) * (side == "enemy" ? 22f : -22f);
+            }
             if (activeEv?.Type == "immune" && activeEv.Variant != "shield" && mon.Id == activeEv.Target)
             {
                 float p = Mathf.Clamp01(battleEventTimer / Mathf.Max(1f, BattleEventDuration(activeEv)));
@@ -673,40 +724,56 @@ namespace Dynamons
 
         private void DrawPassivePill(VectorCanvas vec, Transform parent, CombatantView mon, float x, float y, float w, float h)
         {
-            string label, bgFill, borderColor;
-            string prefix = !string.IsNullOrEmpty(mon.Passive.label) ? mon.Passive.label : null;
-            if (mon.Passive.type == "shield")
+            string key = GameData.PassiveKey(mon?.Passive);
+            if (key == null) return;
+            bool asleep = mon.Status == "sleep";
+            int th = Math.Max(1, mon.Passive.threshold), ch = Math.Min(th, mon.Charges);
+            bool ready = key == "charge" && ch >= th;
+            bool depleted = (key == "shield" && mon.Shield <= 0) || ready;
+            var (bg, accent, border) = HudWidgets.PassivePalette(key, asleep, depleted);
+
+            vec.FillRoundRect(x, y, w, h, 7f, bg);
+            vec.FillRect(x + 4f, y + 1.5f, w - 8f, 1.5f, new Color(accent.r, accent.g, accent.b, 0.3f));
+            vec.StrokeRoundRect(x + 1f, y + 1f, w - 2f, h - 2f, 6.5f, border, ready ? 1.8f : 1.4f);
+
+            float emblemCx = x + 10.5f, emblemCy = y + h * 0.5f;
+            vec.FillCircle(emblemCx, emblemCy, 7.2f, new Color(0f, 0f, 0f, 0.38f));
+            HudWidgets.DrawPassiveEmblem(vec, key, emblemCx, emblemCy, 4.6f, accent, bg);
+
+            string prefix = !string.IsNullOrEmpty(mon.Passive.label) ? mon.Passive.label.ToUpperInvariant() : "VOID";
+            float textX = x + 19f, textW = w - 23f, textMid = textX + textW * 0.5f;
+
+            if (key == "charge")
             {
-                prefix ??= "SHELL";
-                if (mon.Shield > 0) { label = $"{prefix} x{mon.Shield}"; bgFill = "#093154"; borderColor = mon.Status == "sleep" ? "#567494" : "#3ee7ff"; }
-                else { label = $"{prefix} BROKEN"; bgFill = "#162230"; borderColor = "#566d85"; }
+                string label = ready ? $"{prefix} READY!" : $"{prefix} {ch}/{th}";
+                fonts.Draw(parent, "white_stroked_small", label, textMid, y + 3f, 6.8f, "center", ready ? accent : (Color?)null, textW);
+                float gap = 2f, pipW = (textW - gap * (th - 1)) / th, pipY = y + h - 5.2f;
+                for (int i = 0; i < th; i++)
+                {
+                    float px = textX + i * (pipW + gap);
+                    Color pc = i < ch ? (ready ? GameUi.HexColor("#ffe052") : accent) : GameUi.HexColor("#06170e");
+                    vec.FillRoundRect(px, pipY, pipW, 2.5f, 1f, pc);
+                }
+                return;
             }
-            else if (mon.Passive.type == "ramp")
+
+            string textLabel;
+            if (key == "shield")
             {
-                prefix ??= "BLAZE";
+                textLabel = mon.Shield > 1 ? $"{prefix} x{mon.Shield}" : (mon.Shield > 0 ? $"{prefix} ON" : $"{prefix} OFF");
+            }
+            else if (key == "ramp")
+            {
                 int pct = GameData.Round(mon.PowerStacks * mon.Passive.dmgPerStack * 100);
-                label = mon.PowerStacks > 0 ? $"{prefix} x{mon.PowerStacks} {pct}% UP" : $"{prefix} {pct}% UP";
-                bgFill = "#361108"; borderColor = mon.Status == "sleep" ? "#7c4928" : "#ff7b29";
-            }
-            else if (mon.Passive.type == "charge")
-            {
-                prefix ??= "SPORE";
-                int th = Math.Max(1, mon.Passive.threshold), ch = Math.Min(th, mon.Charges);
-                bool ready = ch >= th;
-                label = ready ? $"{prefix} READY" : $"{prefix} {ch}/{th}";
-                bgFill = ready ? "#1b3d0b" : "#0c2c18"; borderColor = mon.Status == "sleep" ? "#426e52" : (ready ? "#ffd447" : "#4cd964");
+                textLabel = mon.PowerStacks > 0 ? $"{prefix} x{mon.PowerStacks} {pct}%" : $"{prefix} {pct}%";
             }
             else
             {
-                prefix ??= "VOID";
                 int chPct = GameData.Round(mon.Passive.chance * 100);
                 int bonPct = GameData.Round(mon.VoidStacks * mon.Passive.dmgPerStack * 100);
-                label = mon.VoidStacks > 0 ? $"{prefix} x{mon.VoidStacks} {bonPct}% UP" : $"{prefix} {chPct}% 0% UP";
-                bgFill = "#1a0b36"; borderColor = mon.Status == "sleep" ? "#6d5c8c" : "#c06eff";
+                textLabel = mon.VoidStacks > 0 ? $"{prefix} x{mon.VoidStacks} {bonPct}%" : $"{prefix} {chPct}%";
             }
-            vec.FillRoundRect(x, y, w, h, 6f, GameUi.HexColor(bgFill, 0.94f));
-            vec.StrokeRect(x + 1f, y + 1f, w - 2f, h - 2f, GameUi.HexColor(borderColor, 0.95f), 1.5f);
-            fonts.Draw(parent, "white_stroked_small", label, x + w * 0.5f, y + 4f, 7f, "center", null, w - 8f);
+            fonts.Draw(parent, "white_stroked_small", textLabel, textMid, y + (h - 7.5f) * 0.5f, 7.5f, "center", null, textW);
         }
 
         private void DrawBattleSpeedButton(VectorCanvas vec, Transform parent)
@@ -743,6 +810,10 @@ namespace Dynamons
                                 (ev.Type == "status" && ev.Status == "sick") ? "sick" : null;
                 if (report != null)
                     ui.Art(hpHudLayer, $"session/ui/report_{report}", box.Cx - 56f, box.Y + 22f - lift - stackOffset, 112f, 28f, true);
+                else if (ev.Type == "miss")
+                    fonts.Draw(hpHudLayer, "white_stroked_big", "MISS!", box.Cx, box.Y + 14f - lift - stackOffset, 17f, "center", GameUi.HexColor("#ffe066"));
+                else if (ev.Type == "sleep")
+                    fonts.Draw(hpHudLayer, "white_stroked_small", "ASLEEP!", box.Cx, box.Y + 14f - lift - stackOffset, 12f, "center", GameUi.HexColor("#d8b8ff"));
                 else if (ev.Type == "immune")
                     fonts.Draw(hpHudLayer, "white_stroked_small", ev.Variant == "shield" ? "SHELL BROKEN" : "VOID IMMUNE",
                         box.Cx, box.Y + 8f - lift - stackOffset, 11f, "center", GameUi.HexColor(ev.Variant == "shield" ? "#8ef8ff" : "#e6b8ff"));
@@ -795,11 +866,93 @@ namespace Dynamons
             return false;
         }
 
+        private void OpenPassiveInspect(string side)
+        {
+            if (battleWaiting || battle == null || battle.Outcome != null || itemsModalLayer == null) return;
+            var mon = side == "enemy"
+                ? (viewActiveEnemy < viewEnemy.Count ? viewEnemy[viewActiveEnemy] : null)
+                : (viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null);
+            string key = GameData.PassiveKey(mon?.Passive);
+            if (key == null) return;
+
+            passiveInspectSide = side;
+            ui.Sound("screen_open", save);
+            GameUi.Clear(itemsModalLayer);
+            GameUi.Fill(itemsModalLayer, new Color(0.02f, 0.015f, 0.06f, 0.70f), 0f, 0f, GameUi.Width, GameUi.Height, true);
+            ui.HitBox(itemsModalLayer, 0f, 0f, GameUi.Width, GameUi.Height, () =>
+            {
+                ui.Sound("screen_close", save);
+                passiveInspectSide = null;
+                GameUi.Clear(itemsModalLayer);
+            });
+
+            var p = mon.Passive;
+            bool asleep = mon.Status == "sleep";
+            int th = Math.Max(1, p.threshold), ch = Math.Min(th, mon.Charges);
+            bool ready = key == "charge" && ch >= th;
+            bool depleted = (key == "shield" && mon.Shield <= 0) || ready;
+            var (bg, accent, border) = HudWidgets.PassivePalette(key, asleep, depleted);
+
+            const float cw = 280f, chCard = 166f;
+            float cx = (GameUi.Width - cw) * 0.5f, cy = (GameUi.Height - chCard) * 0.5f;
+            var vec = VectorCanvas.Create("PassiveInspectVec", itemsModalLayer, cx, cy, cw, chCard);
+            vec.FillRoundRect(0f, 0f, cw, chCard, 12f, bg);
+            vec.FillRect(6f, 2f, cw - 12f, 4f, new Color(accent.r, accent.g, accent.b, 0.35f));
+            vec.StrokeRoundRect(1.5f, 1.5f, cw - 3f, chCard - 3f, 11f, border, 2f);
+            vec.FillCircle(30f, 34f, 17f, new Color(0f, 0f, 0f, 0.45f));
+            vec.StrokeCircle(30f, 34f, 17f, accent, 1.5f, 0f, Mathf.PI * 2f, 16);
+            HudWidgets.DrawPassiveEmblem(vec, key, 30f, 34f, 9.5f, accent, bg);
+
+            string ownerTag = side == "enemy" ? "ENEMY TRAIT" : "YOUR TRAIT";
+            string statusTag;
+            if (key == "shield") statusTag = mon.Shield > 0 ? $"SHIELD X{mon.Shield}" : "SHATTERED";
+            else if (key == "ramp") statusTag = $"STACKS X{mon.PowerStacks}";
+            else if (key == "charge") statusTag = ready ? "FULL POWER" : $"CHARGE {ch}/{th}";
+            else statusTag = $"EVADES X{mon.VoidStacks}";
+
+            vec.FillRoundRect(16f, 64f, cw - 32f, 24f, 6f, new Color(0f, 0f, 0f, 0.35f));
+            if (key == "charge")
+            {
+                float barGap = 4f, barW = (cw - 48f - barGap * (th - 1)) / th;
+                for (int i = 0; i < th; i++)
+                {
+                    Color pc = i < ch ? (ready ? GameUi.HexColor("#ffe052") : accent) : GameUi.HexColor("#06170e");
+                    vec.FillRoundRect(24f + i * (barW + barGap), 71f, barW, 10f, 3f, pc);
+                }
+            }
+            vec.Commit();
+
+            fonts.Draw(itemsModalLayer, "white_stroked_small", GameData.PassiveTitle(p), cx + 56f, cy + 16f, 11f, "left", accent, 170f);
+            fonts.Draw(itemsModalLayer, "white_stroked_small", ownerTag, cx + 56f, cy + 33f, 8f, "left", GameUi.HexColor("#cbd5e1"));
+            fonts.Draw(itemsModalLayer, "white_stroked_small", statusTag, cx + cw - 18f, cy + 33f, 8f, "right", accent);
+
+            if (key != "charge")
+            {
+                string metricText = key == "shield"
+                    ? (asleep ? "INACTIVE WHILE ASLEEP" : (mon.Shield > 0 ? "NEXT HOSTILE HIT BLOCKED" : "SHIELD ALREADY SPENT"))
+                    : key == "ramp"
+                        ? $"CURRENT BONUS: {GameData.Round(mon.PowerStacks * p.dmgPerStack * 100)}% DAMAGE UP"
+                        : $"{GameData.Round(p.chance * 100)}% EVADE - BONUS: {GameData.Round(mon.VoidStacks * p.dmgPerStack * 100)}% UP";
+                fonts.Draw(itemsModalLayer, "white_stroked_small", metricText, cx + cw * 0.5f, cy + 71f, 8.5f, "center", null, cw - 40f);
+            }
+
+            fonts.DrawLines(itemsModalLayer, "white_small", GameData.PassiveDesc(p), cx + cw * 0.5f, cy + 98f, 9f, cw - 36f, 13f, "center");
+            fonts.Draw(itemsModalLayer, "white_stroked_small", "TAP ANYWHERE TO CLOSE", cx + cw * 0.5f, cy + chCard - 18f, 7.5f, "center", GameUi.HexColor("#a9b8cc"));
+            ui.ArtButton(itemsModalLayer, "general/btn_close", cx + cw - 24f, cy - 12f, 36f, 36f, () =>
+            {
+                ui.Sound("screen_close", save);
+                passiveInspectSide = null;
+                GameUi.Clear(itemsModalLayer);
+            });
+        }
+
         private void OpenItemsOverlay(bool inBattle, bool allowCatch, bool blockCans, Action<string> onUse, Action onClose, RectTransform customHost = null)
         {
             var host = customHost ?? itemsModalLayer;
             if (host == null) return;
+            passiveInspectSide = null;
             modalItemPage = 0;
+            modalItemFilter = 0;
             modalSelectedItemId = null;
             modalPickingStoneTarget = false;
             modalStoneId = null;
@@ -809,12 +962,13 @@ namespace Dynamons
         private void RenderItemsModalContents(Transform host, bool inBattle, bool allowCatch, bool blockCans, Action<string> onUse, Action onClose)
         {
             GameUi.Clear(host);
-            GameUi.Fill(host, new Color(0f, 0f, 0f, 0.60f), 0f, 0f, GameUi.Width, GameUi.Height, true);
+            GameUi.Fill(host, new Color(0.02f, 0.015f, 0.06f, 0.68f), 0f, 0f, GameUi.Width, GameUi.Height, true);
 
             if (modalPickingStoneTarget && !string.IsNullOrEmpty(modalStoneId))
             {
-                GameUi.Fill(host, new Color(0f, 0f, 0f, 0.55f), 0f, 0f, GameUi.Width, GameUi.Height, true);
-                fonts.Draw(host, "white_stroked_big", "CHOOSE DYNAMON", GameUi.Width * 0.5f, 104f, 18f, "center");
+                GameUi.Fill(host, new Color(0f, 0f, 0f, 0.45f), 0f, 0f, GameUi.Width, GameUi.Height, true);
+                fonts.Draw(host, "white_stroked_big", "CHOOSE DYNAMON", GameUi.Width * 0.5f, 96f, 18f, "center");
+                fonts.Draw(host, "white_stroked_small", "TAP A READY DYNAMON TO LEVEL UP", GameUi.Width * 0.5f, 122f, 8.5f, "center", GameUi.HexColor("#ffe066"));
                 var targets = ReadyTargetsForStone(modalStoneId).Take(6).ToArray();
                 for (int i = 0; i < targets.Length; i++)
                 {
@@ -839,10 +993,18 @@ namespace Dynamons
             }
 
             var order = data.items.Select((it, idx) => (it.id, idx)).ToDictionary(x => x.id, x => x.idx);
-            var entries = save.Inventory
+            var allOwned = save.Inventory
                 .Where(row => row.amount > 0 && (!inBattle || (data.Item(row.id)?.inBattle == true && (row.id != "discatch" || allowCatch))))
                 .OrderBy(row => order.TryGetValue(row.id, out int idx) ? idx : 999)
                 .ToArray();
+
+            var entries = inBattle || modalItemFilter == 0
+                ? allOwned
+                : allOwned.Where(row =>
+                {
+                    bool battleItem = data.Item(row.id)?.inBattle == true;
+                    return modalItemFilter == 1 ? !battleItem : battleItem;
+                }).ToArray();
 
             int totalPages = Math.Max(1, (entries.Length + 7) / 8);
             modalItemPage = GameData.Clamp(modalItemPage, 0, totalPages - 1);
@@ -850,9 +1012,48 @@ namespace Dynamons
             if (string.IsNullOrEmpty(modalSelectedItemId) || !entries.Any(e => e.id == modalSelectedItemId))
                 modalSelectedItemId = pageItems.FirstOrDefault()?.id;
 
-            const float bgX = 15f, bgY = 141.5f, bgW = 290f, bgH = 285f;
+            const float bgX = 15f, bgW = 290f, bgH = 285f;
+            float bgY = inBattle ? 128f : 122f;
+
+            var chromeVec = VectorCanvas.Create("BagChromeVec", host, 0f, 0f, GameUi.Width, GameUi.Height);
+            var slotOverlay = GameUi.Box("BagSlotOverlays", host, 0f, 0f, GameUi.Width, GameUi.Height);
+            var slotBadgeVec = VectorCanvas.Create("BagSlotBadgeVec", slotOverlay, 0f, 0f, GameUi.Width, GameUi.Height);
+
+            if (!inBattle)
+            {
+                var tabs = new[] { ("ALL", 0), ("MAP USE", 1), ("BATTLE", 2) };
+                for (int t = 0; t < tabs.Length; t++)
+                {
+                    var (label, filterVal) = tabs[t];
+                    bool activeTab = modalItemFilter == filterVal;
+                    float tx = 24f + t * 92f, ty = 90f, tw = 86f, th = 24f;
+                    chromeVec.FillRoundRect(tx, ty, tw, th, 8f, GameUi.HexColor(activeTab ? "#247d3d" : "#162033", 0.95f));
+                    chromeVec.StrokeRoundRect(tx + 1f, ty + 1f, tw - 2f, th - 2f, 7f, GameUi.HexColor(activeTab ? "#9cf284" : "#3a506e", 0.95f), activeTab ? 1.8f : 1.2f);
+                    fonts.Draw(slotOverlay, "white_stroked_small", label, tx + tw * 0.5f, ty + 7f, 8.5f, "center",
+                        activeTab ? GameUi.HexColor("#ffffff") : GameUi.HexColor("#9db0c7"));
+                    int fv = filterVal;
+                    ui.HitBox(host, tx, ty, tw, th, () =>
+                    {
+                        if (modalItemFilter == fv) return;
+                        ui.Sound("button_click", save);
+                        modalItemFilter = fv;
+                        modalItemPage = 0;
+                        modalSelectedItemId = null;
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                    });
+                }
+            }
+
             ui.Art(host, "items/bg_items", bgX, bgY, bgW, bgH);
-            ui.ArtButton(host, "general/btn_close", bgX + bgW - 30f, bgY - 5f, 40f, 40f, () =>
+            chromeVec.transform.SetAsLastSibling();
+
+            // Page indicator badge on the right side of the green header (clear of backpack and close button)
+            float pgX = bgX + bgW - 86f, pgY = bgY + 23f;
+            chromeVec.FillRoundRect(pgX, pgY, 48f, 18f, 6f, GameUi.HexColor("#123b1a", 0.92f));
+            chromeVec.StrokeRoundRect(pgX + 1f, pgY + 1f, 46f, 16f, 5f, GameUi.HexColor("#7df26b", 0.9f), 1.2f);
+            fonts.Draw(slotOverlay, "white_stroked_small", $"{modalItemPage + 1}/{totalPages}", pgX + 24f, pgY + 4.5f, 8f, "center");
+
+            ui.ArtButton(host, "general/btn_close", bgX + bgW - 28f, bgY - 2f, 38f, 38f, () =>
             {
                 ui.Sound("screen_close", save);
                 GameUi.Clear(host);
@@ -861,52 +1062,98 @@ namespace Dynamons
 
             for (int i = 0; i < 8; i++)
             {
-                float cx = GameUi.Width * 0.5f - 65f * 1.5f + (i % 4) * 65f;
-                float cy = bgY + bgH * 0.5f - 45f + (i / 4) * 72f;
+                float cx = GameUi.Width * 0.5f - 66f * 1.5f + (i % 4) * 66f;
+                float cy = bgY + 93f + (i / 4) * 70f;
                 if (i < pageItems.Length)
                 {
                     var row = pageItems[i];
+                    var slotItem = data.Item(row.id);
+                    bool slotUsable = IsItemUsable(row.id, inBattle, allowCatch, blockCans);
+                    bool isSel = row.id == modalSelectedItemId;
+
                     ui.ArtButton(host, "items/item_slot", cx - 27.5f, cy - 27.5f, 55f, 55f, () =>
                     {
                         ui.Sound("button_click", save);
                         modalSelectedItemId = row.id;
                         RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
                     });
-                    if (row.id == modalSelectedItemId) ui.Art(host, "items/item_selected", cx - 30f, cy - 30f, 60f, 60f);
-                    ui.Art(host, GameUi.Item(row.id), cx - 20.5f, cy - 24.5f, 41f, 41f, true);
-                    fonts.Draw(host, "white_small", row.amount.ToString(), cx, cy + 16f, 9f, "center");
+                    if (isSel) ui.Art(host, "items/item_selected", cx - 30f, cy - 30f, 60f, 60f);
+                    ui.Art(host, GameUi.Item(row.id), cx - 19f, cy - 22f, 38f, 38f, true, slotUsable ? 1f : 0.48f);
+
+                    if (slotUsable)
+                    {
+                        slotBadgeVec.FillCircle(cx - 20f, cy - 19f, 4f, GameUi.HexColor("#31e069"));
+                        slotBadgeVec.StrokeCircle(cx - 20f, cy - 19f, 4f, GameUi.HexColor("#0d381b"), 1.2f, 0f, Mathf.PI * 2f, 10);
+                    }
+                    else if (!inBattle && slotItem?.inBattle == true)
+                    {
+                        slotBadgeVec.FillRoundRect(cx - 26f, cy - 25f, 22f, 11f, 4f, GameUi.HexColor("#173a5e", 0.94f));
+                        slotBadgeVec.StrokeRoundRect(cx - 25.5f, cy - 24.5f, 21f, 10f, 3.5f, GameUi.HexColor("#62bfff", 0.9f), 1f);
+                        fonts.Draw(slotOverlay, "white_stroked_small", "BTL", cx - 15f, cy - 23f, 6f, "center", GameUi.HexColor("#9ee0ff"));
+                    }
+                    else if (row.id.StartsWith("levelup_", StringComparison.Ordinal))
+                    {
+                        slotBadgeVec.FillRoundRect(cx - 26f, cy - 25f, 20f, 11f, 4f, GameUi.HexColor("#54310f", 0.94f));
+                        slotBadgeVec.StrokeRoundRect(cx - 25.5f, cy - 24.5f, 19f, 10f, 3.5f, GameUi.HexColor("#e39d3b", 0.9f), 1f);
+                        fonts.Draw(slotOverlay, "white_stroked_small", "XP", cx - 16f, cy - 23f, 6f, "center", GameUi.HexColor("#ffe08a"));
+                    }
+
+                    string qtyText = $"x{row.amount}";
+                    float pillW = row.amount >= 100 ? 31f : row.amount >= 10 ? 27f : 23f;
+                    float px = cx + 27f - pillW, py = cy + 12f;
+                    slotBadgeVec.FillRoundRect(px, py, pillW, 14f, 5f, GameUi.HexColor("#0c2236", 0.95f));
+                    slotBadgeVec.StrokeRoundRect(px + 0.5f, py + 0.5f, pillW - 1f, 13f, 4.5f,
+                        GameUi.HexColor(isSel ? "#ffd447" : "#49b7e0", 0.95f), isSel ? 1.4f : 1.1f);
+                    fonts.Draw(slotOverlay, "white_stroked_small", qtyText, px + pillW * 0.5f, py + 3f, 7.5f, "center");
                 }
                 else
                 {
-                    ui.Art(host, "items/item_slot", cx - 27.5f, cy - 27.5f, 55f, 55f, false, 0.72f);
+                    ui.Art(host, "items/item_slot", cx - 27.5f, cy - 27.5f, 55f, 55f, false, 0.55f);
+                }
+            }
+            slotBadgeVec.Commit();
+
+            float useY = bgY + bgH - 15f;
+            if (totalPages > 1)
+            {
+                bool hasPrev = modalItemPage > 0, hasNext = modalItemPage < totalPages - 1;
+                float prevX = bgX + 4f, nextX = bgX + bgW - 78f, navY = useY + 7.5f;
+
+                chromeVec.FillRoundRect(prevX, navY, 74f, 30f, 8f, GameUi.HexColor(hasPrev ? "#163b5c" : "#121a24", 0.95f));
+                chromeVec.StrokeRoundRect(prevX + 1f, navY + 1f, 72f, 28f, 7f, GameUi.HexColor(hasPrev ? "#5cd6ff" : "#38485c", 0.95f), 1.5f);
+                Color pCol = GameUi.HexColor(hasPrev ? "#7ce4ff" : "#56687a");
+                chromeVec.FillPoly(new[] { new Vector2(prevX + 12f, navY + 15f), new Vector2(prevX + 20f, navY + 10f), new Vector2(prevX + 20f, navY + 20f) }, pCol);
+                fonts.Draw(slotOverlay, "white_stroked_small", "PREV", prevX + 46f, navY + 10f, 8.5f, "center", hasPrev ? (Color?)null : pCol);
+                if (hasPrev)
+                {
+                    ui.HitBox(host, prevX, navY, 74f, 30f, () =>
+                    {
+                        ui.Sound("button_click", save);
+                        modalItemPage--;
+                        modalSelectedItemId = null;
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                    });
+                }
+
+                chromeVec.FillRoundRect(nextX, navY, 74f, 30f, 8f, GameUi.HexColor(hasNext ? "#163b5c" : "#121a24", 0.95f));
+                chromeVec.StrokeRoundRect(nextX + 1f, navY + 1f, 72f, 28f, 7f, GameUi.HexColor(hasNext ? "#5cd6ff" : "#38485c", 0.95f), 1.5f);
+                Color nCol = GameUi.HexColor(hasNext ? "#7ce4ff" : "#56687a");
+                chromeVec.FillPoly(new[] { new Vector2(nextX + 62f, navY + 15f), new Vector2(nextX + 54f, navY + 10f), new Vector2(nextX + 54f, navY + 20f) }, nCol);
+                fonts.Draw(slotOverlay, "white_stroked_small", "NEXT", nextX + 28f, navY + 10f, 8.5f, "center", hasNext ? (Color?)null : nCol);
+                if (hasNext)
+                {
+                    ui.HitBox(host, nextX, navY, 74f, 30f, () =>
+                    {
+                        ui.Sound("button_click", save);
+                        modalItemPage++;
+                        modalSelectedItemId = null;
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                    });
                 }
             }
 
-            if (modalItemPage > 0)
-            {
-                var prevBtn = ui.ArtButton(host, "general/btn_arrow_right", 0f, bgY + bgH * 0.5f - 20f, 35f, 40f, () =>
-                {
-                    ui.Sound("button_click", save);
-                    modalItemPage--;
-                    modalSelectedItemId = null;
-                    RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
-                });
-                var prevImg = prevBtn.GetComponentInChildren<UnityEngine.UI.RawImage>();
-                if (prevImg != null) prevImg.uvRect = new Rect(1f, 0f, -1f, 1f);
-            }
-            if (modalItemPage < totalPages - 1)
-            {
-                ui.ArtButton(host, "general/btn_arrow_right", GameUi.Width - 35f, bgY + bgH * 0.5f - 20f, 35f, 40f, () =>
-                {
-                    ui.Sound("button_click", save);
-                    modalItemPage++;
-                    modalSelectedItemId = null;
-                    RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
-                });
-            }
-
             bool canUse = IsItemUsable(modalSelectedItemId, inBattle, allowCatch, blockCans);
-            ui.ArtButton(host, "items/btn_use", (GameUi.Width - 105f) * 0.5f, bgY + bgH - 22.5f, 105f, 45f, () =>
+            ui.ArtButton(host, "items/btn_use", (GameUi.Width - 105f) * 0.5f, useY, 105f, 45f, () =>
             {
                 if (!IsItemUsable(modalSelectedItemId, inBattle, allowCatch, blockCans)) return;
                 if (!inBattle && modalSelectedItemId.StartsWith("levelup_", StringComparison.Ordinal))
@@ -928,22 +1175,82 @@ namespace Dynamons
 
             if (!string.IsNullOrEmpty(modalSelectedItemId))
             {
-                ui.Art(host, GameUi.Item(modalSelectedItemId), GameUi.Width * 0.5f - 39f, bgY + bgH - 19.5f, 32f, 32f, true, canUse ? 1f : 0.45f);
+                ui.Art(slotOverlay, GameUi.Item(modalSelectedItemId), GameUi.Width * 0.5f - 36f, useY + 9.5f, 26f, 26f, true, canUse ? 1f : 0.45f);
                 var item = data.Item(modalSelectedItemId);
-                fonts.Draw(host, "white_small", (item?.title ?? modalSelectedItemId).ToUpperInvariant(), GameUi.Width * 0.5f, bgY + 219f, 9f, "center");
-                fonts.DrawLines(host, "white_small", item?.desc ?? "Item details are unavailable.", GameUi.Width * 0.5f, bgY + 236f, 8.5f, 254f, 12f, "center");
-                if (!inBattle && item?.inBattle == true)
-                    fonts.Draw(host, "white_small", "USE DURING BATTLE", GameUi.Width * 0.5f, bgY + bgH + 28f, 8f, "center");
-                else if (!inBattle && modalSelectedItemId.StartsWith("levelup_", StringComparison.Ordinal) && !canUse)
-                    fonts.Draw(host, "white_small", "FILL DYNAMON XP TO 100% FIRST", GameUi.Width * 0.5f, bgY + bgH + 28f, 8f, "center");
-                else if (inBattle && blockCans && modalSelectedItemId.StartsWith("can_", StringComparison.Ordinal) && !canUse)
-                    fonts.Draw(host, "white_small", "CANNOT USE CANS WHILE ASLEEP", GameUi.Width * 0.5f, bgY + bgH + 28f, 8f, "center");
+                string tagText = "READY", tagBg = "#1c6b36", tagBd = "#5df08c";
+                string helperText = string.Empty;
+
+                if (canUse)
+                {
+                    if (!inBattle && modalSelectedItemId == "healing_kit")
+                    {
+                        int injured = save.Team.Count(m => m.Hp < data.battleData.maxHP);
+                        helperText = $"{injured} OF {save.Team.Count} DYNAMONS INJURED";
+                    }
+                    else if (!inBattle && modalSelectedItemId.StartsWith("levelup_", StringComparison.Ordinal))
+                    {
+                        int readyCount = ReadyTargetsForStone(modalSelectedItemId).Count;
+                        helperText = readyCount == 1 ? "1 DYNAMON READY TO LEVEL UP" : $"{readyCount} DYNAMONS READY TO LEVEL UP";
+                    }
+                    else if (inBattle)
+                    {
+                        helperText = "TAP USE TO ACTIVATE THIS TURN";
+                    }
+                }
+                else if (!inBattle && item?.inBattle == true)
+                {
+                    tagText = "BATTLE"; tagBg = "#194a73"; tagBd = "#5ec4ff";
+                    helperText = "OPEN BAG DURING BATTLE TO USE";
+                }
+                else if (!inBattle && modalSelectedItemId.StartsWith("levelup_", StringComparison.Ordinal))
+                {
+                    tagText = "NEED XP"; tagBg = "#6b4011"; tagBd = "#ffc15e";
+                    helperText = "FILL DYNAMON XP TO 100% FIRST";
+                }
+                else if (!inBattle && modalSelectedItemId == "healing_kit")
+                {
+                    tagText = "FULL HP"; tagBg = "#2b3b4a"; tagBd = "#8ca9c4";
+                    helperText = "ALL DYNAMONS ARE AT FULL HP";
+                }
+                else if (modalSelectedItemId == "starter_ticket")
+                {
+                    tagText = "PASS"; tagBg = "#472c5e"; tagBd = "#c88cff";
+                    helperText = "USE STARTER EVENT ON MAP TO ENTER";
+                }
+                else if (inBattle && blockCans && modalSelectedItemId.StartsWith("can_", StringComparison.Ordinal))
+                {
+                    tagText = "ASLEEP"; tagBg = "#571f73"; tagBd = "#d88aff";
+                    helperText = "CANNOT USE CANS WHILE ASLEEP";
+                }
+
+                float tagX = bgX + bgW - 82f, tagY = bgY + 217f;
+                chromeVec.FillRoundRect(tagX, tagY, 62f, 15f, 5f, GameUi.HexColor(tagBg, 0.96f));
+                chromeVec.StrokeRoundRect(tagX + 0.5f, tagY + 0.5f, 61f, 14f, 4.5f, GameUi.HexColor(tagBd, 0.95f), 1.2f);
+                fonts.Draw(slotOverlay, "white_stroked_small", tagText, tagX + 31f, tagY + 3.5f, 7f, "center", GameUi.HexColor(tagBd));
+
+                fonts.Draw(slotOverlay, "white_stroked_small", (item?.title ?? modalSelectedItemId).ToUpperInvariant(),
+                    bgX + 19f, bgY + 219f, 9f, "left", null, 182f);
+                fonts.DrawLines(slotOverlay, "white_small", item?.desc ?? "Item details are unavailable.",
+                    bgX + 19f, bgY + 235f, 8f, 252f, 11f, "left");
+
+                if (!string.IsNullOrEmpty(helperText))
+                {
+                    float hy = useY + 52f;
+                    chromeVec.FillRoundRect(24f, hy, GameUi.Width - 48f, 22f, 7f, GameUi.HexColor("#101b2e", 0.92f));
+                    chromeVec.StrokeRoundRect(25f, hy + 1f, GameUi.Width - 50f, 20f, 6f, GameUi.HexColor(tagBd, 0.65f), 1.2f);
+                    fonts.Draw(slotOverlay, "white_stroked_small", helperText, GameUi.Width * 0.5f, hy + 6.5f, 7.8f, "center", GameUi.HexColor(tagBd), GameUi.Width - 64f);
+                }
             }
             else
             {
-                fonts.Draw(host, "black_small", "YOUR BAG IS EMPTY", GameUi.Width * 0.5f, bgY + 95f, 11f, "center");
-                fonts.Draw(host, "white_small", "Find items in battles and loot bags.", GameUi.Width * 0.5f, bgY + 224f, 9f, "center");
+                bool filteredEmpty = !inBattle && allOwned.Length > 0;
+                fonts.Draw(slotOverlay, "black_small", filteredEmpty ? "NO ITEMS IN THIS TAB" : "YOUR BAG IS EMPTY",
+                    GameUi.Width * 0.5f, bgY + 115f, 10.5f, "center");
+                fonts.Draw(slotOverlay, "white_small", filteredEmpty ? "Switch filter tab to view other items." : "Find items in battles and loot bags.",
+                    GameUi.Width * 0.5f, bgY + 228f, 9f, "center");
             }
+            slotOverlay.transform.SetAsLastSibling();
+            chromeVec.Commit();
         }
     }
 }

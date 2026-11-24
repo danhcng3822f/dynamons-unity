@@ -223,17 +223,28 @@ function checkFontDesignRulesAndDtoConstraints() {
     for (const call of txt.matchAll(/fonts\.(?:Draw|DrawLines)\(([^;]*)\);/g)) {
       const stripped = call[1].replace(/\{[^{}]*\}/g, '');
       for (const lit of stripped.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g)) {
-        assert.ok(!lit[1].includes('+'), `${rel}: Forbidden '+' inside font text literal: "${lit[1]}"`);
+        assert.ok(!/[+&]/.test(lit[1]), `${rel}: Forbidden '+' or '&' inside font text literal: "${lit[1]}"`);
       }
     }
     assert.ok(!/GRANTED_STARTER_MONS/.test(txt), `${rel}: Auto-gifted bonus starters are forbidden`);
     assert.ok(!/private void (Header|Settings)\(/.test(txt), `${rel}: Unused Header/Settings UI methods must not remain`);
+    if (rel.endsWith('MapView.cs')) {
+      assert.ok(!/mapUserDragged/.test(txt), 'MapView.cs must not pan camera automatically while walking');
+    }
     if (rel.endsWith('BattleView.cs')) {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
+      assert.ok(txt.includes('GameData.HasPassive(') && txt.includes('GameData.PassiveKey('), 'BattleView.cs must guard passives with GameData.HasPassive/PassiveKey');
+      assert.ok(txt.includes('else if (ev.Type == "miss")'), 'BattleView.cs must render miss feedback immediately in BeginBattleEvent');
     }
     if (file.includes('/Scripts/Unity/') && !file.endsWith('GameUi.cs') && !file.endsWith('GameRoot.cs')) {
       assert.ok(!/\bui\.Label\(/.test(txt), `${rel}: Must use BitmapFontRegistry instead of legacy ui.Label`);
     }
+  }
+
+  for (const wf of ['build-linux.yml', 'build-android.yml']) {
+    const wfTxt = readFileSync(join(unityDir, '.github', 'workflows', wf), 'utf8');
+    assert.ok(/contents:\s*write/.test(wfTxt), `${wf} must request contents: write for GitHub Releases`);
+    assert.ok(wfTxt.includes('gh release upload'), `${wf} must auto-upload build artifact to GitHub Release`);
   }
 
   for (const dtoFile of [join(assetsDir, 'Scripts', 'Core', 'GameData.cs'), join(assetsDir, 'Scripts', 'Core', 'SaveData.cs')]) {

@@ -2,9 +2,12 @@ name: Build Dynamons 2 (Linux x64)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feat/unity-web-visual-parity
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -45,3 +48,24 @@ jobs:
           path: Dynamons2-linux-x64.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish Linux build to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="latest"
+          ASSET="Dynamons2-linux-x64.tar.gz"
+          TITLE="Dynamons 2 Builds (Latest)"
+          NOTES="Automated IL2CPP Linux x64 and Android arm64-v8a builds (commit ${GITHUB_SHA::7})."
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" "$ASSET" -R "$GITHUB_REPOSITORY" --target "$GITHUB_REF_NAME" --title "$TITLE" --notes "$NOTES" || true
+          fi
+          for attempt in 1 2 3; do
+            if gh release upload "$TAG" "$ASSET" -R "$GITHUB_REPOSITORY" --clobber; then
+              break
+            fi
+            [ "$attempt" -eq 3 ] && exit 1
+            sleep 3
+          done
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$TITLE" --notes "$NOTES" || true
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"

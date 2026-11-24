@@ -20,6 +20,67 @@ namespace Dynamons
         public Dialogue[] dialogs;
         public FontData[] fonts;
 
+        public static bool HasPassive(Passive p) =>
+            p != null && (!string.IsNullOrEmpty(p.id) || !string.IsNullOrEmpty(p.type) || !string.IsNullOrEmpty(p.label));
+
+        public static string PassiveKey(Passive p)
+        {
+            if (!HasPassive(p)) return null;
+            if (!string.IsNullOrEmpty(p.type)) return p.type;
+            if (p.id == "shadow_phase" || p.chance > 0f) return "void";
+            return null;
+        }
+
+        public static string PassiveTitle(Passive p) => PassiveKey(p) switch
+        {
+            "shield" => "SHELL SHIELD",
+            "ramp" => "EMBER FURY",
+            "charge" => "SPORE CHARGE",
+            "void" => "VOID PHASE",
+            _ => (p?.label ?? "PASSIVE").ToUpperInvariant(),
+        };
+
+        public static string PassiveDesc(Passive p)
+        {
+            if (!HasPassive(p)) return string.Empty;
+            switch (PassiveKey(p))
+            {
+                case "shield":
+                {
+                    int hits = Math.Max(1, p.shieldHits);
+                    return hits == 1
+                        ? "Blocks 1st enemy attack each battle while awake."
+                        : $"Blocks first {hits} enemy attacks while awake.";
+                }
+                case "ramp":
+                {
+                    int pct = Math.Max(1, Round(p.dmgPerStack * 100));
+                    return $"Each attack builds BLAZE, raising DMG by {pct}% per stack.";
+                }
+                case "charge":
+                {
+                    int th = Math.Max(1, p.threshold);
+                    string move = string.IsNullOrEmpty(p.boostedTitle) ? "SPORE SHOT" : p.boostedTitle.ToUpperInvariant();
+                    return $"Charges in {th} hits into {move} (100% hit and Hypno).";
+                }
+                case "void":
+                {
+                    int ev = Round(p.chance * 100);
+                    int pct = Math.Max(1, Round(p.dmgPerStack * 100));
+                    return $"{ev}% chance to evade attacks and gain {pct}% DMG per evade.";
+                }
+                default:
+                    return p.label ?? string.Empty;
+            }
+        }
+
+        public void Normalize()
+        {
+            if (mons == null) return;
+            foreach (var mon in mons)
+                if (mon != null && !HasPassive(mon.passive)) mon.passive = null;
+        }
+
         public MonData Mon(string id) => Array.Find(mons, row => row.id == id);
         public MoveData Move(string id) => Array.Find(abilities, row => row.id == id);
         public ItemData Item(string id) => Array.Find(items, row => row.id == id);

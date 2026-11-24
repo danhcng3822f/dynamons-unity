@@ -29,6 +29,7 @@ namespace Dynamons
                 if (snapshot == null) throw new InvalidOperationException("Gameplay snapshot not found. Run unity/tools/import-web.mjs.");
                 var gameData = JsonUtility.FromJson<GameData>(snapshot.text);
                 if (gameData == null || gameData.mons == null || gameData.mapNodes == null) throw new InvalidOperationException("Invalid gameplay snapshot.");
+                gameData.Normalize();
                 savePath = Path.Combine(Application.persistentDataPath, "Dynamons2", "save.json");
                 var loaded = SaveStore.Load(savePath, gameData);
                 var random = new System.Random();
