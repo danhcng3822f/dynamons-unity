@@ -32,6 +32,9 @@ jobs:
       - name: Package the Linux player
         run: |
           test -x build/StandaloneLinux64/Dynamons2.x86_64
+          test -f build/StandaloneLinux64/Dynamons2_Data/il2cpp_data/Metadata/global-metadata.dat
+          find build/StandaloneLinux64 -name 'GameAssembly.so' -print -quit | grep -q .
+          test ! -d build/StandaloneLinux64/Dynamons2_Data/MonoBleedingEdge
           tar -C build/StandaloneLinux64 -czf Dynamons2-linux-x64.tar.gz .
 
       - name: Upload the build artifact
