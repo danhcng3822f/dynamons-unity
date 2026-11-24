@@ -209,6 +209,15 @@ function assetSources() {
   return result;
 }
 
+const PRESERVED_CUSTOM_ART = new Set([
+  'Art/splash/logo.png',
+  'Art/splash/app_icon.png',
+  'Art/map/island_lan.png',
+  'Art/map/boat.png',
+  'Art/general/enemies/lan_npc_avatar.png',
+  'Art/general/enemies/lan_npc_icon.png',
+]);
+
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const data = normalize(JSON.parse(readFileSync(new URL('data/gameplay.js', source), 'utf8')));
   validateData(data);
@@ -217,7 +226,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const json = JSON.stringify(data);
   for (const [path, from] of assets) {
     const to = new URL(path, resources);
-    if (path === 'Art/splash/logo.png' && existsSync(to)) continue;
+    if (PRESERVED_CUSTOM_ART.has(path) && existsSync(to)) continue;
     mkdirSync(dirname(fileURLToPath(to)), { recursive: true });
     copyFileSync(from, to);
   }

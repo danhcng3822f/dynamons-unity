@@ -248,6 +248,10 @@ function checkFontDesignRulesAndDtoConstraints() {
   assert.ok(buildSettingsTxt.includes('PlayerSettings.SplashScreen.show = false'), 'DynamonsBuildSettings.cs must disable Unity SplashScreen');
   assert.ok(assetExists('splash/app_icon', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/app_icon.png');
   assert.ok(assetExists('splash/logo', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/logo.png');
+  assert.ok(assetExists('map/island_lan', ['.png']), 'Missing Assets/Resources/Dynamons/Art/map/island_lan.png');
+  assert.ok(assetExists('map/boat', ['.png']), 'Missing Assets/Resources/Dynamons/Art/map/boat.png');
+  assert.ok(assetExists('general/enemies/lan_npc_avatar', ['.png']), 'Missing Assets/Resources/Dynamons/Art/general/enemies/lan_npc_avatar.png');
+  assert.ok(assetExists('general/enemies/lan_npc_icon', ['.png']), 'Missing Assets/Resources/Dynamons/Art/general/enemies/lan_npc_icon.png');
 
   const releaseWf = readFileSync(join(unityDir, '.github', 'workflows', 'build-release.yml'), 'utf8');
   assert.ok(/contents:\s*write/.test(releaseWf), 'build-release.yml must request contents: write for GitHub Releases');
