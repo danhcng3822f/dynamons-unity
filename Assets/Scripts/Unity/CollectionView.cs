@@ -27,11 +27,11 @@ namespace Dynamons
         private RectTransform teamSlotsVisual, teamFreeHealLayer, teamDragGhostLayer;
         private VectorCanvas teamDragCueVec;
 
-        private bool levelUpActive, levelUpPlayedSfx, levelUpRevealFinalized;
+        private bool levelUpActive, levelUpPlayedSfx, levelUpRevealFinalized, levelUpSkipShown, levelUpButtonShown;
         private float levelUpElapsedMs;
         private LevelUpPayload levelUpPayload;
         private Action levelUpOnDone;
-        private RectTransform levelUpHost;
+        private RectTransform levelUpHost, levelUpVisualHost, levelUpControlsHost;
 
         private Reward[] shopLastLoot = Array.Empty<Reward>();
         private Product shopLastProduct;
@@ -56,9 +56,13 @@ namespace Dynamons
 
             levelUpActive = false;
             levelUpRevealFinalized = false;
+            levelUpSkipShown = false;
+            levelUpButtonShown = false;
             levelUpPayload = null;
             levelUpOnDone = null;
             levelUpHost = null;
+            levelUpVisualHost = null;
+            levelUpControlsHost = null;
 
             shopLootOpen = false;
             resultActive = false;
@@ -94,7 +98,7 @@ namespace Dynamons
                 {
                     RenderResultDynamicStage();
                 }
-                else if (!resultXpRevealDone && resultElapsedMs <= 500f)
+                else if (!resultXpRevealDone)
                 {
                     RenderResultDynamicStage();
                     if (resultElapsedMs >= 460f) resultXpRevealDone = true;
@@ -141,19 +145,23 @@ namespace Dynamons
             if (page == null || payload == null) { onDone?.Invoke(); return; }
             if (levelUpHost != null) { levelUpHost.gameObject.SetActive(false); Destroy(levelUpHost.gameObject); }
             levelUpHost = GameUi.Box("LevelUpOverlay", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            levelUpVisualHost = GameUi.Box("LevelUpVisual", levelUpHost, 0f, 0f, GameUi.Width, GameUi.Height);
+            levelUpControlsHost = GameUi.Box("LevelUpControls", levelUpHost, 0f, 0f, GameUi.Width, GameUi.Height);
             levelUpPayload = payload;
             levelUpOnDone = onDone;
             levelUpElapsedMs = 0f;
             levelUpPlayedSfx = false;
             levelUpRevealFinalized = false;
+            levelUpSkipShown = false;
+            levelUpButtonShown = false;
             levelUpActive = true;
             RenderLevelUpOverlay();
         }
 
         private void RenderLevelUpOverlay()
         {
-            if (levelUpHost == null || levelUpPayload == null) return;
-            GameUi.Clear(levelUpHost);
+            if (levelUpHost == null || levelUpVisualHost == null || levelUpControlsHost == null || levelUpPayload == null) return;
+            GameUi.Clear(levelUpVisualHost);
 
             bool hasStone = !string.IsNullOrEmpty(levelUpPayload.StoneId);
             float stoneEnd = hasStone ? 380f : 0f;
@@ -168,55 +176,55 @@ namespace Dynamons
             bool ready = phase == "reveal";
 
             float overlayAlpha = Mathf.Min(0.88f, (levelUpElapsedMs / 220f) * 0.88f);
-            GameUi.Fill(levelUpHost, new Color(0f, 0f, 0f, overlayAlpha), 0f, 0f, GameUi.Width, GameUi.Height, true);
+            GameUi.Fill(levelUpVisualHost, new Color(0f, 0f, 0f, overlayAlpha), 0f, 0f, GameUi.Width, GameUi.Height, true);
 
-            ui.Art(levelUpHost, "general/pedestal", 44f, 198f, 232f, 141.5f, true);
-            ui.Art(levelUpHost, "session/mon_shadow", 102.5f, 228f, 115f, 28f, true, 0.65f);
+            ui.Art(levelUpVisualHost, "general/pedestal", 44f, 198f, 232f, 141.5f, true);
+            ui.Art(levelUpVisualHost, "session/mon_shadow", 102.5f, 228f, 115f, 28f, true, 0.65f);
 
             bool upgraded = levelUpElapsedMs >= startEnd + 450f;
             int displayLevel = upgraded ? levelUpPayload.NewLevel : levelUpPayload.OldLevel;
             float bounce = phase == "blast" ? Mathf.Sin(levelUpElapsedMs * 0.03f) * 3f : 0f;
-            ui.Art(levelUpHost, GameUi.Mon(levelUpPayload.MonId, "front"), 100f, 126f + bounce, 120f, 122f, true);
+            ui.Art(levelUpVisualHost, GameUi.Mon(levelUpPayload.MonId, "front"), 100f, 126f + bounce, 120f, 122f, true);
 
             if (phase == "stone" && hasStone)
             {
                 float sp = Mathf.Clamp01(levelUpElapsedMs / stoneEnd);
                 float sy = 310f - sp * 110f;
                 float sz = 44f * (1f - sp * 0.35f);
-                ui.Art(levelUpHost, GameUi.Item(levelUpPayload.StoneId), GameUi.Width * 0.5f - sz * 0.5f, sy - sz * 0.5f, sz, sz, true, 1f - sp * 0.4f);
+                ui.Art(levelUpVisualHost, GameUi.Item(levelUpPayload.StoneId), GameUi.Width * 0.5f - sz * 0.5f, sy - sz * 0.5f, sz, sz, true, 1f - sp * 0.4f);
             }
 
             if (phase == "start")
             {
                 float p = Mathf.Clamp01((levelUpElapsedMs - stoneEnd) / (startEnd - stoneEnd));
-                BattleFxView.RenderLevelupBlastFrame(levelUpHost, ui, "start", p, GameUi.Width * 0.5f, 254f, 1.12f, 0.96f);
+                BattleFxView.RenderLevelupBlastFrame(levelUpVisualHost, ui, "start", p, GameUi.Width * 0.5f, 254f, 1.12f, 0.96f);
             }
             else if (phase == "blast")
             {
                 float p = Mathf.Clamp01((levelUpElapsedMs - startEnd) / (blastEnd - startEnd));
-                BattleFxView.RenderLevelupBlastFrame(levelUpHost, ui, "blast", p, GameUi.Width * 0.5f, 254f, 1.15f, 1f);
+                BattleFxView.RenderLevelupBlastFrame(levelUpVisualHost, ui, "blast", p, GameUi.Width * 0.5f, 254f, 1.15f, 1f);
                 if (p > 0.38f && p < 0.66f)
                 {
                     float flash = Mathf.Sin(((p - 0.38f) / 0.28f) * Mathf.PI) * 0.65f;
-                    GameUi.Fill(levelUpHost, new Color(1f, 1f, 1f, flash), 0f, 0f, GameUi.Width, GameUi.Height);
+                    GameUi.Fill(levelUpVisualHost, new Color(1f, 1f, 1f, flash), 0f, 0f, GameUi.Width, GameUi.Height);
                 }
             }
             else if (phase == "fade")
             {
                 float p = Mathf.Clamp01((levelUpElapsedMs - blastEnd) / (fadeEnd - blastEnd));
-                BattleFxView.RenderLevelupBlastFrame(levelUpHost, ui, "fade", p, GameUi.Width * 0.5f, 254f, 1.12f, 1f - p);
+                BattleFxView.RenderLevelupBlastFrame(levelUpVisualHost, ui, "fade", p, GameUi.Width * 0.5f, 254f, 1.12f, 1f - p);
             }
 
-            if (upgraded) fonts.Draw(levelUpHost, "white_stroked_big", "LEVEL UP!", GameUi.Width * 0.5f, 34f, 24f, "center");
+            if (upgraded) fonts.Draw(levelUpVisualHost, "white_stroked_big", "LEVEL UP!", GameUi.Width * 0.5f, 34f, 24f, "center");
 
             if (phase == "fade" || phase == "reveal")
             {
-                HudWidgets.DrawMonPane(ui, fonts, data, levelUpHost, new MonHudView
+                HudWidgets.DrawMonPane(ui, fonts, data, levelUpVisualHost, new MonHudView
                 {
                     MonId = levelUpPayload.MonId, Level = displayLevel,
                     Hp = data.battleData.maxHP, MaxHp = data.battleData.maxHP,
                 }, "tooltip", GameUi.Width * 0.5f - 50f, 74f, showHpBar: true);
-                ui.Art(levelUpHost, "general/badge_levelup", GameUi.Width * 0.5f + 38f, 70f, 26f, 26f, true);
+                ui.Art(levelUpVisualHost, "general/badge_levelup", GameUi.Width * 0.5f + 38f, 70f, 26f, 26f, true);
 
                 float revealP = ready ? Mathf.Clamp01((levelUpElapsedMs - fadeEnd) / 350f) : 0f;
                 var curStats = new Stats
@@ -225,17 +233,17 @@ namespace Dynamons
                     def = Mathf.RoundToInt(Mathf.Lerp(levelUpPayload.OldStats.def, levelUpPayload.NewStats.def, revealP)),
                     aim = Mathf.RoundToInt(Mathf.Lerp(levelUpPayload.OldStats.aim, levelUpPayload.NewStats.aim, revealP)),
                 };
-                HudWidgets.DrawStatsPane(ui, fonts, levelUpHost, curStats, 78f, 344f);
+                HudWidgets.DrawStatsPane(ui, fonts, levelUpVisualHost, curStats, 78f, 344f);
 
                 var newAbilities = levelUpPayload.NewAbilities ?? Array.Empty<MoveData>();
                 if (newAbilities.Length > 0)
                 {
-                    fonts.Draw(levelUpHost, "white_stroked_small", newAbilities.Length > 1 ? "NEW SKILLS!" : "NEW SKILL!", GameUi.Width * 0.5f, 282f, 11f, "center");
+                    fonts.Draw(levelUpVisualHost, "white_stroked_small", newAbilities.Length > 1 ? "NEW SKILLS!" : "NEW SKILL!", GameUi.Width * 0.5f, 282f, 11f, "center");
                     if (newAbilities.Length == 1)
                     {
                         var ab = newAbilities[0];
-                        ui.Art(levelUpHost, GameUi.Move(ab.id), GameUi.Width * 0.5f - 78f, 302f, 34f, 34f, true);
-                        fonts.Draw(levelUpHost, "white_stroked_small", (ab.title ?? ab.id).ToUpperInvariant(), GameUi.Width * 0.5f - 36f, 313f, 10f, "left", null, 155f);
+                        ui.Art(levelUpVisualHost, GameUi.Move(ab.id), GameUi.Width * 0.5f - 78f, 302f, 34f, 34f, true);
+                        fonts.Draw(levelUpVisualHost, "white_stroked_small", (ab.title ?? ab.id).ToUpperInvariant(), GameUi.Width * 0.5f - 36f, 313f, 10f, "left", null, 155f);
                     }
                     else
                     {
@@ -246,29 +254,36 @@ namespace Dynamons
                         {
                             var ab = list[i];
                             float cx = startX + i * colW + colW * 0.5f;
-                            ui.Art(levelUpHost, GameUi.Move(ab.id), cx - 16f, 297f, 32f, 32f, true);
-                            fonts.Draw(levelUpHost, "white_stroked_small", (ab.title ?? ab.id).ToUpperInvariant(), cx, 331f, 7.5f, "center", null, colW - 4f);
+                            ui.Art(levelUpVisualHost, GameUi.Move(ab.id), cx - 16f, 297f, 32f, 32f, true);
+                            fonts.Draw(levelUpVisualHost, "white_stroked_small", (ab.title ?? ab.id).ToUpperInvariant(), cx, 331f, 7.5f, "center", null, colW - 4f);
                         }
                     }
                 }
             }
 
-            if (ready)
+            if (ready && !levelUpButtonShown)
             {
-                ui.ArtButton(levelUpHost, "general/btn_cool", (GameUi.Width - 105f) * 0.5f, 474f, 105f, 45f, () =>
+                levelUpButtonShown = true;
+                GameUi.Clear(levelUpControlsHost);
+                ui.ArtButton(levelUpControlsHost, "general/btn_cool", (GameUi.Width - 105f) * 0.5f, 474f, 105f, 45f, () =>
                 {
                     ui.Sound("cool_button", save);
                     var cb = levelUpOnDone;
                     levelUpActive = false;
                     levelUpPayload = null;
                     levelUpOnDone = null;
-                    if (levelUpHost != null) { levelUpHost.gameObject.SetActive(false); Destroy(levelUpHost.gameObject); levelUpHost = null; }
+                    if (levelUpHost != null) { levelUpHost.gameObject.SetActive(false); Destroy(levelUpHost.gameObject); }
+                    levelUpHost = null;
+                    levelUpVisualHost = null;
+                    levelUpControlsHost = null;
                     cb?.Invoke();
                 });
             }
-            else if (levelUpElapsedMs >= 900f)
+            else if (!ready && levelUpElapsedMs >= 900f && !levelUpSkipShown)
             {
-                ui.HitBox(levelUpHost, 0f, 0f, GameUi.Width, GameUi.Height, () =>
+                levelUpSkipShown = true;
+                GameUi.Clear(levelUpControlsHost);
+                ui.HitBox(levelUpControlsHost, 0f, 0f, GameUi.Width, GameUi.Height, () =>
                 {
                     levelUpElapsedMs = fadeEnd + 400f;
                     levelUpRevealFinalized = true;
@@ -695,9 +710,16 @@ namespace Dynamons
                 }
             }
 
-            if (idx >= 3 && save.Team.Count > 1)
+            bool hasRelease = idx >= 3 && save.Team.Count > 1;
+            bool hasLead = idx > 0;
+            bool hasLevelUp = needXp > 0 && mon.Xp >= needXp;
+            bool hasHeal = mon.Hp < maxHp;
+            bool allFour = hasRelease && hasLead && hasLevelUp && hasHeal;
+
+            if (hasRelease)
             {
-                ui.ArtButton(page, "team/info/btn_release", 5f, 278f, 75f, 35f, () =>
+                float relW = allFour ? 70f : 75f;
+                ui.ArtButton(page, "team/info/btn_release", 5f, 278f, relW, 35f, () =>
                 {
                     ui.Sound("button_click", save);
                     teamReleaseConfirm = true;
@@ -705,15 +727,16 @@ namespace Dynamons
                 });
             }
 
-            if (idx > 0)
+            if (hasLead)
             {
-                float swapX = idx >= 3 ? 84f : 6f;
-                var leadVec = VectorCanvas.Create("SetLeadVec", page, swapX, 281f, 74f, 28f);
-                leadVec.FillRoundRect(0f, 0f, 74f, 28f, 7f, GameUi.HexColor("#2c8e43"));
-                leadVec.StrokeRect(1f, 1f, 72f, 26f, GameUi.HexColor("#9cf284"), 1.5f);
+                float leadW = allFour ? 62f : 74f;
+                float swapX = hasRelease ? (allFour ? 78f : 84f) : 6f;
+                var leadVec = VectorCanvas.Create("SetLeadVec", page, swapX, 281f, leadW, 28f);
+                leadVec.FillRoundRect(0f, 0f, leadW, 28f, 7f, GameUi.HexColor("#2c8e43"));
+                leadVec.StrokeRect(1f, 1f, leadW - 2f, 26f, GameUi.HexColor("#9cf284"), 1.5f);
                 leadVec.Commit();
-                fonts.Draw(page, "white_stroked_small", "SET LEAD", swapX + 37f, 290f, 8f, "center");
-                ui.HitBox(page, swapX, 281f, 74f, 28f, () =>
+                fonts.Draw(page, "white_stroked_small", "SET LEAD", swapX + leadW * 0.5f, 290f, allFour ? 7f : 8f, "center", null, leadW - 6f);
+                ui.HitBox(page, swapX, 281f, leadW, 28f, () =>
                 {
                     if (flow.Swap(idx, 0)) Persist();
                     ui.Sound("cool_button", save);
@@ -724,34 +747,36 @@ namespace Dynamons
             }
 
             float rightX = GameUi.Width - 5f;
-            if (needXp > 0 && mon.Xp >= needXp)
+            if (hasLevelUp)
             {
                 string stone = MatchingStoneFor(mon);
-                rightX -= 112f;
+                float lvlW = allFour ? 104f : 112f;
+                rightX -= lvlW;
                 bool hasStone = !string.IsNullOrEmpty(stone);
                 float bx = rightX;
-                ui.ArtButton(page, "general/btn_levelup", bx, 272f, 112f, 45f, () =>
+                ui.ArtButton(page, "general/btn_levelup", bx, 272f, lvlW, 45f, () =>
                 {
                     TryTriggerStoneLevelUp(idx, stone, RenderTeamView);
                 }, hasStone);
                 if (hasStone)
                 {
-                    ui.Art(page, GameUi.Item(stone), bx + 8f, 280f, 28f, 28f, true);
-                    ui.Art(page, "general/btn_levelup_text", bx + 36f, 284f, 68f, 18f, true);
+                    ui.Art(page, GameUi.Item(stone), bx + (allFour ? 6f : 8f), 280f, 28f, 28f, true);
+                    ui.Art(page, "general/btn_levelup_text", bx + (allFour ? 33f : 36f), 284f, allFour ? 65f : 68f, 18f, true);
                 }
                 else
                 {
-                    fonts.Draw(page, "white_stroked_small", "NEED STONE", bx + 56f, 288f, 8f, "center");
+                    fonts.Draw(page, "white_stroked_small", "NEED STONE", bx + lvlW * 0.5f, 288f, allFour ? 7.5f : 8f, "center", null, lvlW - 8f);
                 }
-                rightX -= 5f;
+                rightX -= allFour ? 4f : 5f;
             }
 
-            if (mon.Hp < maxHp)
+            if (hasHeal)
             {
-                rightX -= 100f;
+                float healW = allFour ? 64f : 100f;
+                rightX -= healW;
                 float hx = rightX;
-                ui.ArtButton(page, "team/info/btn_heal_kit", hx, 272f, 100f, 45f, () => HealTeamSlot(idx));
-                fonts.Draw(page, "white_stroked_small", "FREE", hx + 50f, 308f, 7f, "center");
+                ui.ArtButton(page, "team/info/btn_heal_kit", hx, 272f, healW, 45f, () => HealTeamSlot(idx));
+                fonts.Draw(page, "white_stroked_small", "FREE", hx + healW * 0.5f, 308f, 7f, "center");
             }
         }
 

@@ -82,6 +82,17 @@ function checkSceneGuidAndNoMetaBloat() {
   assert.ok(sceneTxt.includes(guidMatch[1]), 'Main.unity must reference GameRoot.cs GUID');
   const pngMetas = walk(assetsDir, f => f.endsWith('.png.meta') || f.endsWith('.jpg.meta'));
   assert.equal(pngMetas.length, 0, `Unexpected texture .meta bloat: ${pngMetas.join(', ')}`);
+
+  const texImportPath = join(assetsDir, 'Editor', 'DynamonsTextureImport.cs');
+  assert.ok(existsSync(texImportPath), 'Missing DynamonsTextureImport.cs for Web NPOT parity');
+  const texImportTxt = readFileSync(texImportPath, 'utf8');
+  assert.ok(texImportTxt.includes('TextureImporterNPOTScale.None'), 'DynamonsTextureImport.cs must set TextureImporterNPOTScale.None');
+  assert.ok(texImportTxt.includes('TextureWrapMode.Clamp'), 'DynamonsTextureImport.cs must set TextureWrapMode.Clamp');
+  assert.ok(texImportTxt.includes('mipmapEnabled = false'), 'DynamonsTextureImport.cs must disable mipmaps');
+
+  const teamDragTxt = readFileSync(join(assetsDir, 'Scripts', 'Unity', 'TeamSlotDrag.cs'), 'utf8');
+  assert.ok(teamDragTxt.includes('suppressClick'), 'TeamSlotDrag.cs must suppress post-drag click');
+  assert.ok(teamDragTxt.includes('inFrame'), 'TeamSlotDrag.cs must cancel drops outside logical frame bounds');
 }
 
 function assetExists(relWithoutExt, searchExts = ['.png', '.jpg']) {
@@ -102,6 +113,13 @@ function checkStaticAssetLiteralsAndTemplates() {
   for (const file of unityCs) {
     const txt = readFileSync(file, 'utf8');
     const rel = relative(unityDir, file);
+    for (const call of txt.matchAll(/(?:DrawClippedBar|DrawClippedSegment)\([^;]*?\)/g)) {
+      for (const arg of call[0].matchAll(/"([^"]+)"/g)) {
+        if (!arg[1].includes('/') || arg[1].includes('{')) continue;
+        checkedLiterals.add(arg[1]);
+        assert.ok(assetExists(arg[1]), `${rel}: Missing clipped bar asset '${arg[1]}'`);
+      }
+    }
     for (const m of txt.matchAll(simpleArtCalls)) {
       const p = m[1];
       const after = txt.slice(m.index + m[0].length, m.index + m[0].length + 6).trimStart();
@@ -209,6 +227,10 @@ function checkFontDesignRulesAndDtoConstraints() {
       }
     }
     assert.ok(!/GRANTED_STARTER_MONS/.test(txt), `${rel}: Auto-gifted bonus starters are forbidden`);
+    assert.ok(!/private void (Header|Settings)\(/.test(txt), `${rel}: Unused Header/Settings UI methods must not remain`);
+    if (rel.endsWith('BattleView.cs')) {
+      assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
+    }
     if (file.includes('/Scripts/Unity/') && !file.endsWith('GameUi.cs') && !file.endsWith('GameRoot.cs')) {
       assert.ok(!/\bui\.Label\(/.test(txt), `${rel}: Must use BitmapFontRegistry instead of legacy ui.Label`);
     }

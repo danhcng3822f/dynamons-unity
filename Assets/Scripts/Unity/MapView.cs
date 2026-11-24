@@ -15,6 +15,7 @@ namespace Dynamons
         private RectTransform mapLayer, mapAvatar, freeHealBox, mapTicketBadge;
         private RawImage arenaFlashImage;
         private MapDrag mapDrag;
+        private Dictionary<int, Encounter> cachedMapRolls;
         private Coroutine walkRoutine;
         private float mapOffset, minOffset, arenaFlashTimer;
         private bool walking, mapUserDragged;
@@ -30,6 +31,7 @@ namespace Dynamons
             mapTicketBadge = null;
             arenaFlashImage = null;
             mapDrag = null;
+            cachedMapRolls = null;
             walkRoutine = null;
             arenaFlashTimer = 0f;
             walking = false;
@@ -67,7 +69,8 @@ namespace Dynamons
             int maxScroll = visibility?.scrollMax ?? 0;
             minOffset = maxScroll > 0 ? Mathf.Max(MapMinX, -(maxScroll - GameUi.Width)) : MapMinX;
 
-            var rolls = flow.World.RollMap(save);
+            cachedMapRolls = flow.World.RollMap(save);
+            var rolls = cachedMapRolls;
             mapLayer = GameUi.Box("WorldMap", page, 0f, 0f, 1355f, GameUi.Height);
             mapDrag = mapLayer.gameObject.AddComponent<MapDrag>();
             mapDrag.Frame = ui.Frame;
@@ -97,7 +100,7 @@ namespace Dynamons
             var visibility = flow.World.Visibility(save);
             int maxScroll = visibility?.scrollMax ?? 0;
             minOffset = maxScroll > 0 ? Mathf.Max(MapMinX, -(maxScroll - GameUi.Width)) : MapMinX;
-            var rolls = flow.World.RollMap(save);
+            var rolls = cachedMapRolls ?? flow.World.RollMap(save);
 
             var backdrop = GameUi.Box("WorldBackdrop", parent, 0f, 0f, 1355f, GameUi.Height);
             GameUi.Fill(backdrop, GameUi.HexColor("#56bcd4"), -75f, 0f, 1430f, GameUi.Height);
@@ -217,12 +220,18 @@ namespace Dynamons
                 trigger.triggers.Add(entry);
             }
 
-            Add(EventTriggerType.BeginDrag, pe => mapDrag?.OnBeginDrag(pe));
+            bool nodeDragStarted = false;
+            Add(EventTriggerType.PointerDown, _ => nodeDragStarted = false);
+            Add(EventTriggerType.BeginDrag, pe => { nodeDragStarted = true; mapDrag?.OnBeginDrag(pe); });
             Add(EventTriggerType.Drag, pe => mapDrag?.OnDrag(pe));
             Add(EventTriggerType.EndDrag, pe => mapDrag?.OnEndDrag(pe));
             Add(EventTriggerType.PointerClick, pe =>
             {
-                if (overlay != null || pe.dragging || Vector2.Distance(pe.pressPosition, pe.position) > 10f) return;
+                if (overlay != null || nodeDragStarted || pe.dragging || Vector2.Distance(pe.pressPosition, pe.position) > 10f)
+                {
+                    nodeDragStarted = false;
+                    return;
+                }
                 if (arena) arenaFlashTimer = 0.14f;
                 Travel(node, enc);
             });
@@ -351,7 +360,7 @@ namespace Dynamons
         private void Travel(MapNode node, Encounter encounter)
         {
             if (overlay != null || flow.World.Path(save, node.id).Length == 0) return;
-            var rolls = flow.World.RollMap(save);
+            var rolls = cachedMapRolls ?? flow.World.RollMap(save);
             if (encounter == null) rolls.TryGetValue(node.id, out encounter);
             encounter ??= new Encounter { Node = node };
 

@@ -48,7 +48,7 @@ namespace Dynamons
         private string battleLog = string.Empty;
         private float trayStartX = GameUi.Width - 4f * 59f;
 
-        private RectTransform arenaLayer, fxSpritesLayer, hpHudLayer, veilLayer, trayBgLayer, controlsLayer, itemsModalLayer;
+        private RectTransform arenaLayer, fxSpritesLayer, hpHudLayer, veilLayer, topHudLayer, trayBgLayer, controlsLayer, itemsModalLayer;
         private VectorCanvas fxBgVec, arenaAuraVec, fxFgVec, rainbowBorderVec;
         private readonly List<(float x, float y, float w, float h, float phase, bool strongGlow)> rainbowTargets =
             new List<(float, float, float, float, float, bool)>();
@@ -75,6 +75,7 @@ namespace Dynamons
             fxSpritesLayer = null;
             hpHudLayer = null;
             veilLayer = null;
+            topHudLayer = null;
             trayBgLayer = null;
             controlsLayer = null;
             itemsModalLayer = null;
@@ -117,6 +118,7 @@ namespace Dynamons
             fxFgVec = VectorCanvas.Create("FxFgVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
             hpHudLayer = GameUi.Box("BattleHpHud", page, 0f, 0f, GameUi.Width, GameUi.Height);
             veilLayer = GameUi.Box("BattleVeil", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            topHudLayer = GameUi.Box("BattleTopHud", page, 0f, 0f, GameUi.Width, GameUi.Height);
             trayBgLayer = GameUi.Box("BattleTrayBg", page, 0f, 0f, GameUi.Width, GameUi.Height);
             controlsLayer = GameUi.Box("BattleControls", page, 0f, 0f, GameUi.Width, GameUi.Height);
             rainbowBorderVec = VectorCanvas.Create("BattleRainbowVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
@@ -498,6 +500,7 @@ namespace Dynamons
             GameUi.Clear(arenaLayer);
             GameUi.Clear(fxSpritesLayer);
             GameUi.Clear(hpHudLayer);
+            GameUi.Clear(topHudLayer);
             fxBgVec.Clear();
             arenaAuraVec.Clear();
             fxFgVec.Clear();
@@ -585,7 +588,7 @@ namespace Dynamons
                     BattleFxView.RenderImmuneFx(fxFgVec, progress, PositionBox(targetSide), battleTimeMs, activeEv.Variant ?? "void");
                 }
                 else if (activeEv.Type == "mega")
-                    BattleFxView.RenderMegaTransform(fxSpritesLayer, fxFgVec, ui, progress, activeEv.MonId, battleTimeMs);
+                    BattleFxView.RenderMegaTransform(fxSpritesLayer, ui, progress, activeEv.MonId, battleTimeMs);
             }
 
             var foe = viewActiveEnemy < viewEnemy.Count ? viewEnemy[viewActiveEnemy] : null;
@@ -616,10 +619,12 @@ namespace Dynamons
             {
                 int aliveEnemies = viewEnemy.Count(m => m.Hp > 0);
                 string iconOverride = battle.Encounter.Kind == "starter_event" ? GameUi.Mon(battle.Encounter.Captain, "icon") : null;
-                HudWidgets.DrawCaptainHud(ui, fonts, hpHudLayer, battle.Encounter.Captain, viewEnemy.Count, aliveEnemies, 5f, 5f, iconOverride);
+                HudWidgets.DrawCaptainHud(ui, fonts, topHudLayer, battle.Encounter.Captain, viewEnemy.Count, aliveEnemies, 5f, 5f, iconOverride);
             }
-            HudWidgets.DrawTopHud(ui, fonts, data, save, hpHudLayer, false);
-            DrawBattleSpeedButton(hudVec, hpHudLayer);
+            HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer, false);
+            var topHudVec = VectorCanvas.Create("TopHudVec", topHudLayer, 0f, 0f, GameUi.Width, GameUi.Height);
+            DrawBattleSpeedButton(topHudVec, topHudLayer);
+            topHudVec.Commit();
             DrawFeedbacks();
 
             if (!string.IsNullOrEmpty(battleLog) && battleLogTimer > 0f && !battleMoreOpen)

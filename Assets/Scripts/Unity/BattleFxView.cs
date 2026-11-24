@@ -961,11 +961,12 @@ namespace Dynamons
             }
         }
 
-        public static void RenderMegaTransform(Transform fxLayer, VectorCanvas vec, GameUi ui, float progress, string monId, float timeMs = 0f)
+        public static void RenderMegaTransform(Transform fxLayer, GameUi ui, float progress, string monId, float timeMs = 0f)
         {
             float p = Mathf.Clamp01(progress);
             float fade = p < 0.15f ? p / 0.15f : p > 0.85f ? (1f - p) / 0.15f : 1f;
-            vec.FillRect(0f, 0f, GameUi.Width, GameUi.Height, GameUi.HexColor("#08041c", 0.72f * fade));
+            var bgVec = VectorCanvas.Create("MegaTransformBg", fxLayer, 0f, 0f, GameUi.Width, GameUi.Height);
+            bgVec.FillRect(0f, 0f, GameUi.Width, GameUi.Height, GameUi.HexColor("#08041c", 0.72f * fade));
             ui.Art(fxLayer, "shop/loot_lights", 0f, 0f, GameUi.Width, GameUi.Height, true, 0.78f * fade);
 
             for (int i = 0; i < 4; i++)
@@ -974,8 +975,9 @@ namespace Dynamons
                 if (rp <= 0f || rp >= 1f) continue;
                 Color rc = RainbowColors[(i * 2) % RainbowColors.Length];
                 rc.a = (1f - rp) * 0.85f;
-                vec.StrokeCircle(GameUi.Width * 0.5f, 260f, 26f + rp * 165f, rc, 4f - rp * 2.5f);
+                bgVec.StrokeCircle(GameUi.Width * 0.5f, 260f, 26f + rp * 165f, rc, 4f - rp * 2.5f);
             }
+            bgVec.Commit();
 
             string phase = p < 0.28f ? "start" : p < 0.78f ? "blast" : "fade";
             float phaseP = p < 0.28f ? p / 0.28f : p < 0.78f ? (p - 0.28f) / 0.5f : (p - 0.78f) / 0.22f;

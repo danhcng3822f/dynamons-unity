@@ -130,9 +130,19 @@ namespace Dynamons
             Check(cap22.Members.Length > 0 && cap22.Members.All(m => m.MonId != "kobalt"),
                 "Captain encounter excludes wild-only pool entries");
 
-            var unlockFlow = new GameFlow(data, SaveData.Create(data, fixtureDay), () => .5);
-            var unlockBattle = new BattleRules(data, new Encounter { Kind = "boss", Node = new MapNode { id = 999, pack = "b", unlocksPack = "c" },
-                Members = new[] { new MemberSpec { MonId = "leafrog", Level = 1 } } }, new[] { OwnedMon.New("krimson", 20, 100) }, () => .5);
+            var unlockSave = SaveData.Create(data, fixtureDay);
+            unlockSave.Team.Add(OwnedMon.New("krimson", 20, 100));
+            unlockSave.NodeId = 10;
+            var unlockFlow = new GameFlow(data, unlockSave, () => .5);
+            var unlockNode = data.Node(10);
+            Check(unlockNode != null, "Fixture node 10 exists");
+            var unlockBattle = unlockFlow.StartBattle(new Encounter
+            {
+                Kind = "boss", Node = unlockNode,
+                Members = new[] { new MemberSpec { MonId = "leafrog", Level = 1 } },
+            }, fixtureDay);
+            Check(unlockBattle != null, "StartBattle succeeds on available node 10");
+            unlockBattle.Player.Base.aim = 120;
             unlockBattle.Enemy.Hp = 1;
             unlockBattle.Apply(new BattleAction("ability", "hellfire"));
             unlockFlow.CommitBattle(unlockBattle, fixtureDay);
@@ -147,8 +157,9 @@ namespace Dynamons
             Check(abilityEv != null && abilityEv.AbilityId == "hellfire" && abilityEv.Side == "player", "Ability event structured metadata");
             Check(immuneEv != null && immuneEv.Variant == "shield" && immuneEv.ShieldHits == 0, "Shield immune event structured metadata");
 
-            var voidFoe = new Encounter { Kind = "wild", CanCapture = true, Members = new[] { new MemberSpec { MonId = "nyxalon", Level = 20 } } };
+            var voidFoe = new Encounter { Kind = "wild", CanCapture = true, Members = new[] { new MemberSpec { MonId = "hyperbug", Level = 20 } } };
             var voidBattle = new BattleRules(data, voidFoe, new[] { OwnedMon.New("krimson", 20, 100) }, () => .01);
+            voidBattle.Player.Base.aim = 120;
             var voidEvs = voidBattle.Apply(new BattleAction("ability", "hellfire"));
             var voidEv = voidEvs.FirstOrDefault(e => e.Type == "immune");
             Check(voidEv != null && voidEv.Variant == "void" && voidEv.Stacks == 1 && voidEv.BonusPct > 0, "Void immune event structured metadata");

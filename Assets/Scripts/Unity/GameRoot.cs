@@ -96,12 +96,6 @@ namespace Dynamons
 
         private void Track(string name) { musicTrack = name; ui.Music(name, save); }
 
-        private void Header(string name)
-        {
-            if (fonts != null) fonts.Draw(page, "white_stroked_big", name, 160f, 14f, 18f, "center", null, 300f);
-            else ui.Label(page, name, 10, 14, 300, 32, 18, GameUi.Gold);
-        }
-
         private void OpenOverlayShell(float dimAlpha = 0.72f)
         {
             CloseOverlay();
@@ -277,16 +271,6 @@ namespace Dynamons
                 });
             }
             RenderLine();
-        }
-
-        private void Settings()
-        {
-            var panel = OpenOverlay("SETTINGS", 215);
-            void Toggle(Action change) { change(); Persist(); Track(musicTrack); Settings(); }
-            ui.Button(panel, "SOUND " + (save.Sound ? "ON" : "OFF"), 32, 44, 232, 34, () => Toggle(() => save.Sound = !save.Sound));
-            ui.Button(panel, "MUSIC " + (save.Music ? "ON" : "OFF"), 32, 83, 232, 34, () => Toggle(() => save.Music = !save.Music));
-            ui.Button(panel, "BATTLE SPEED  " + save.Speed + "X", 32, 122, 232, 34, () => Toggle(() => save.Speed = save.Speed % 3 + 1));
-            ui.Button(panel, "CLOSE", 98, 164, 100, 36, CloseOverlay);
         }
     }
 }
