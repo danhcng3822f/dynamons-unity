@@ -217,6 +217,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const json = JSON.stringify(data);
   for (const [path, from] of assets) {
     const to = new URL(path, resources);
+    if (path === 'Art/splash/logo.png' && existsSync(to)) continue;
     mkdirSync(dirname(fileURLToPath(to)), { recursive: true });
     copyFileSync(from, to);
   }

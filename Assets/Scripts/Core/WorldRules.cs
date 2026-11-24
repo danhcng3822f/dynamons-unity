@@ -83,6 +83,7 @@ namespace Dynamons
             var levels = save.Team.Select(m => m.Level).OrderByDescending(x => x).Take(3).ToArray();
             int Level(int i) => levels.Length == 0 ? 3 + advance * 2 : levels[Math.Min(i, levels.Length - 1)];
             return new Encounter { Kind = "arena", Captain = "stephan", Background = "arena", Node = node, Taunt = Pick(table.taunts), Dialogs = node.arenaDialogs,
+                Ai = new SmartAi { Heal = advance >= 4 ? 2 : 1, Antidote = 1, Pepper = 1, Berry = advance >= 3 ? 1 : 0, HealTrigger = .36, PepperOdds = .45 },
                 Members = mons.Select((id, i) => new MemberSpec { MonId = id, Level = Math.Min(data.MaxLevel, Level(i) + Roll(table.monLevelDeltas)) }).ToArray(),
                 Rewards = Pick(AtProgress(table.rewards, advance).rewardsPool).rewards };
         }
@@ -103,6 +104,7 @@ namespace Dynamons
                 members[i] = new MemberSpec { MonId = row.id, Level = GameData.Clamp(Roll(row.levels) + Roll(info.levelsFactor), 1, data.MaxLevel) };
             }
             return new Encounter { Node = node, Kind = "captain", Captain = captain, Background = node.bg, Members = members,
+                Ai = new SmartAi { Heal = advance >= 3 ? 1 : 0, Antidote = advance >= 2 ? 1 : 0, Pepper = advance >= 4 ? 1 : 0, Berry = advance >= 5 ? 1 : 0, HealTrigger = .32, PepperOdds = .35 },
                 Taunt = Pick(data.mapData.captainTaunts.FirstOrDefault(row => row.name == captain)?.pool), Rewards = Rewards(advance, pack.advance, true) };
         }
 
@@ -141,6 +143,7 @@ namespace Dynamons
                 {
                     var script = node.bossBattle;
                     result[node.id] = new Encounter { Node = node, Kind = "boss", Captain = script.enemy, Background = node.bg, Taunt = script.taunt,
+                        Ai = new SmartAi { Heal = 1, Antidote = 1, Pepper = 1, Berry = 1, HealTrigger = .35, PepperOdds = .45 },
                         Dialogs = script, Rewards = script.reward, Members = script.mons.Select(m => new MemberSpec {MonId = m.id, Level = m.level}).ToArray() };
                 }
                 else if (node.id == save.NodeId) result[node.id] = new Encounter { Node = node };

@@ -30,8 +30,9 @@ namespace Dynamons
                 int aim = actor.Stat("aim");
                 var band = rows.FirstOrDefault(row => aim <= row.upTo) ?? rows.Last();
                 missed = rng() < band.miss;
+                if (actor.Rage || full || actor.ConsecutiveMisses >= 2) missed = false;
                 if (!missed) crit = rng() < band.crit;
-                if (actor.Rage || full) missed = false;
+                actor.ConsecutiveMisses = missed ? actor.ConsecutiveMisses + 1 : 0;
             }
             bool backfire = !item && !missed && actor.Status == "hypno" && rng() < data.battleData.hypnoBackfireChance;
             bool pureMiss = missed && ops.All(Missable);
@@ -133,8 +134,12 @@ namespace Dynamons
         private double Matchup(Combatant mon, Combatant target)
         {
             double hp = mon.Hp / (double)mon.MaxHp;
-            double score = (GameData.Strong(mon.Kind, target.Kind) ? 5.5 : GameData.Strong(target.Kind, mon.Kind) ? -5 : 0);
-            return score + (hp >= .7 ? 1 : hp < .35 ? -2 : 0) - (mon.Status == "sick" || mon.Status == "hypno" ? 1 : 0);
+            bool atkStrong = GameData.Strong(mon.Kind, target.Kind);
+            bool atkWeak = GameData.Strong(target.Kind, mon.Kind);
+            double score = (atkStrong ? 3.5 : atkWeak ? -2.5 : 0) + (atkWeak ? -2.5 : atkStrong ? 2.0 : 0);
+            if (mon.Status == "sleep") score -= 1.5;
+            else if (mon.Status == "sick" || mon.Status == "hypno") score -= 1.0;
+            return score + (hp >= .7 ? 1 : hp < .35 ? -2 : 0);
         }
 
         private void EnemyTurn()
@@ -157,7 +162,7 @@ namespace Dynamons
                     }
                 }
                 if (!Opponents.Any(mon => mon.Mega) && (Turn >= 2 && actor.Hp <= actor.MaxHp * .85 || Opponents.Count(mon => mon.Hp > 0) == 1))
-                { actor.Mega = true; Emit("mega", actor, "MEGA EVOLUTION!"); }
+                { TriggerMegaEvolution(actor); }
                 if (Turn <= 4 && actor.Hp >= actor.MaxHp * .78 && !actor.Moves.Any(move => actor.Ready(move) && move.power > 0 && Damage(actor, target, move) >= target.Hp))
                 {
                     if (enemyBerries > 0 && GameData.Strong(target.Kind, actor.Kind)) { enemyBerries--; Resolve(actor, target, data.Move("item-def_berry")); return; }
@@ -171,13 +176,32 @@ namespace Dynamons
 
             double Score(MoveData move)
             {
+                bool isAttack = move.power > 0 && move.effect.Contains("attack");
                 double score = move.power * data.KindFactor(move.kind, target.Kind);
-                if (cfg == null) return score + (move.effect.Contains("state_") ? 6 : 0);
-                if (move.power > 0 && Damage(actor, target, move) >= target.Hp) score += 200;
-                if (move.effect.Contains("heal")) score += 28 * (actor.MaxHp - actor.Hp) / actor.MaxHp;
-                if (target.Status == null && (move.effect.Contains("state_hypno") || move.effect.Contains("state_sick") || move.effect.Contains("state_sleep"))) score += 10 * (Charged(actor, move) ? 1.5 : move.chance);
+                if (cfg == null)
+                {
+                    if (move.effect.Contains("state_") && target.Status == null) score += 6;
+                    if (move.effect.Contains("heal") && actor.Hp < actor.MaxHp * .45) score += 16;
+                    return score;
+                }
+                int estDmg = isAttack ? Damage(actor, target, move) : 0;
+                if (target.Shield > 0 && isAttack)
+                {
+                    score = move.cooldown > 0 ? score - 35 : 22;
+                    return score;
+                }
+                if (estDmg >= target.Hp && target.Shield <= 0) score += 200 - move.cooldown * 6;
+                if (Charged(actor, move)) score += 22;
+                if (move.effect.Contains("heal") && actor.Hp < actor.MaxHp * .85) score += 28 * (actor.MaxHp - actor.Hp) / actor.MaxHp;
+                if (target.Status == null && (move.effect.Contains("state_hypno") || move.effect.Contains("state_sick") || move.effect.Contains("state_sleep")))
+                    score += 10 * (Charged(actor, move) ? 1.5 : move.chance);
+                if (target.Status == "sleep")
+                {
+                    if (move.effect.Contains("incr_")) score += 16;
+                    else if (isAttack && estDmg < target.Hp) score += estDmg >= 24 ? 12 : -8;
+                }
                 if (actor.Hp > actor.MaxHp * .45 && move.effect.Contains("incr_")) score += 8;
-                if (target.Hp > 35 && move.effect.Contains("decr_")) score += 6;
+                if (target.Hp > 35 && move.effect.Contains("decr_") && target.Mods.atk > -20 && target.Mods.def > -20 && target.Mods.aim > -20) score += 6;
                 return score;
             }
         }

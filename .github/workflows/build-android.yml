@@ -1,4 +1,4 @@
-name: Build Dynamons 2 (Android arm64-v8a)
+name: Build Dynamons Next (Android arm64-v8a)
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
         with:
           targetPlatform: Android
           cliVersion: v0.1.77
-          buildName: Dynamons2
+          buildName: DynamonsNext
           buildsPath: build
           versioning: None
           androidExportType: androidPackage
@@ -36,17 +36,17 @@ jobs:
 
       - name: Verify the Android APK (arm64-v8a)
         run: |
-          test -f build/Android/Dynamons2.apk
-          unzip -l build/Android/Dynamons2.apk | grep -q 'lib/arm64-v8a/libil2cpp.so'
-          ! unzip -l build/Android/Dynamons2.apk | grep -q 'lib/armeabi-v7a/'
-          ! unzip -l build/Android/Dynamons2.apk | grep -q 'lib/x86'
-          cp build/Android/Dynamons2.apk Dynamons2-android-arm64.apk
+          test -f build/Android/DynamonsNext.apk
+          unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/arm64-v8a/libil2cpp.so'
+          ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/armeabi-v7a/'
+          ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/x86'
+          cp build/Android/DynamonsNext.apk DynamonsNext-android-arm64.apk
 
       - name: Upload the Android APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: Dynamons2-android-arm64
-          path: Dynamons2-android-arm64.apk
+          name: DynamonsNext-android-arm64
+          path: DynamonsNext-android-arm64.apk
           if-no-files-found: error
           retention-days: 14
 
@@ -55,8 +55,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="latest"
-          ASSET="Dynamons2-android-arm64.apk"
-          TITLE="Dynamons 2 Builds (Latest)"
+          ASSET="DynamonsNext-android-arm64.apk"
+          TITLE="Dynamons Next Builds (Latest)"
           NOTES="Automated IL2CPP Linux x64 and Android arm64-v8a builds (commit ${GITHUB_SHA::7})."
           if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" "$ASSET" -R "$GITHUB_REPOSITORY" --target "$GITHUB_REF_NAME" --title "$TITLE" --notes "$NOTES" || true
@@ -69,4 +69,5 @@ jobs:
             sleep 3
           done
           gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$TITLE" --notes "$NOTES" || true
+          gh release delete-asset "$TAG" "Dynamons2-android-arm64.apk" -R "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"

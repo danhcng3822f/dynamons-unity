@@ -7,7 +7,7 @@ namespace Dynamons
     public sealed class Combatant
     {
         public string Id, MonId, Kind, Status;
-        public int Level, Hp, MaxHp, Xp, StatCap = 150, DamageCap, SleepTurns, RageTurns, Shield, VoidStacks, PowerStacks, Charges;
+        public int Level, Hp, MaxHp, Xp, StatCap = 150, DamageCap, SleepTurns, RageTurns, Shield, VoidStacks, PowerStacks, Charges, ConsecutiveMisses;
         public bool Sparring, Mega, Rage, SleepFresh;
         public Stats Base, Mods;
         public Passive Passive;
@@ -129,7 +129,8 @@ namespace Dynamons
             if (action.Type == "mega")
             {
                 if (!CanMega) return Array.Empty<BattleEvent>();
-                actor.Mega = true; Emit("mega", actor, "MEGA EVOLUTION!"); return events.ToArray();
+                TriggerMegaEvolution(actor);
+                return events.ToArray();
             }
             MoveData move = null;
             if (action.Type == "ability")
@@ -167,6 +168,48 @@ namespace Dynamons
             Tick(Opponents, Enemy, true);
             if (!CheckEnd()) { SwitchEnemy(); Turn++; }
             return events.ToArray();
+        }
+
+        public int CatchOddsPct(Combatant target) => target == null ? 0 : GameData.Clamp(GameData.Round(CatchOdds(target) * 100.0), 0, 100);
+
+        private void TriggerMegaEvolution(Combatant actor)
+        {
+            if (actor == null || actor.Mega) return;
+            actor.Mega = true;
+            Emit("mega", actor, "MEGA EVOLUTION!");
+            var p = actor.Passive;
+            switch (GameData.PassiveKey(p))
+            {
+                case "shield":
+                    if (actor.Shield <= 0)
+                    {
+                        actor.Shield = 1;
+                        Emit("passive", actor, "MEGA SHELL RESTORED!", variant: "shield", shieldHits: actor.Shield);
+                    }
+                    break;
+                case "ramp":
+                    actor.PowerStacks++;
+                    Emit("passive", actor, "MEGA BLAZE UP!", variant: "ramp", stacks: actor.PowerStacks,
+                        bonusPct: GameData.Round(actor.PowerStacks * p.dmgPerStack * 100));
+                    break;
+                case "charge":
+                {
+                    int th = Math.Max(1, p.threshold);
+                    if (actor.Charges < th)
+                    {
+                        actor.Charges++;
+                        bool ready = actor.Charges >= th;
+                        Emit("passive", actor, ready ? "SPORE FULL POWER READY!" : "MEGA SPORE CHARGE!",
+                            ready: ready, variant: "charge", charges: actor.Charges, threshold: th);
+                    }
+                    break;
+                }
+                case "void":
+                    actor.VoidStacks++;
+                    Emit("passive", actor, "MEGA VOID SURGE!", variant: "void", stacks: actor.VoidStacks,
+                        bonusPct: GameData.Round(actor.VoidStacks * p.dmgPerStack * 100));
+                    break;
+            }
         }
 
         private double CatchOdds(Combatant target)

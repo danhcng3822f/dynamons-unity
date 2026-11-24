@@ -51,7 +51,7 @@ namespace Dynamons
         {
             ui?.Resize();
             if (splashLogo != null)
-                splashLogo.anchoredPosition = new Vector2(34f, -(14f + Mathf.Sin(Time.unscaledTime * 3f) * 2.5f));
+                splashLogo.anchoredPosition = new Vector2(28f, -(12f + Mathf.Sin(Time.unscaledTime * 3f) * 2.5f));
             if (dialogTapHint != null)
                 dialogTapHint.alpha = 0.65f + 0.35f * Mathf.Sin(Time.unscaledTime * 6f);
             UpdateMapAnimations();
@@ -169,7 +169,7 @@ namespace Dynamons
         {
             BeginPage(null); Track("music_map_loop");
             ui.Art(page, "splash/splash", 0f, -325f, 320f, 893f);
-            splashLogo = ui.Art(page, "splash/logo", 34f, 14f, 252f, 100f, true).rectTransform;
+            splashLogo = ui.Art(page, "splash/logo", 28f, 12f, 264f, 136f, true).rectTransform;
             ui.ArtButton(page, "splash/btn_play", 102.5f, 336f, 115f, 48f, () =>
             {
                 ui.Sound("button_click", save);

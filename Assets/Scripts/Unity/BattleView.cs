@@ -8,7 +8,7 @@ namespace Dynamons
     internal sealed class CombatantView
     {
         public string Id, MonId, Status;
-        public int Level, Hp, MaxHp, Shield, VoidStacks, PowerStacks, Charges;
+        public int Level, Hp, MaxHp, Shield, VoidStacks, PowerStacks, Charges, AtkMod, DefMod, AimMod;
         public bool Rage, Mega;
         public Passive Passive;
         public MoveData[] Moves;
@@ -18,6 +18,7 @@ namespace Dynamons
             Id = c.Id, MonId = c.MonId, Level = c.Level, Hp = c.Hp, MaxHp = c.MaxHp,
             Status = c.Status, Rage = c.Rage, Mega = c.Mega, Shield = c.Shield,
             VoidStacks = c.VoidStacks, PowerStacks = c.PowerStacks, Charges = c.Charges,
+            AtkMod = c.Mods.atk, DefMod = c.Mods.def, AimMod = c.Mods.aim,
             Passive = GameData.HasPassive(c.Passive) ? c.Passive : null, Moves = c.Moves,
         };
     }
@@ -310,11 +311,13 @@ namespace Dynamons
                 ui.Sound(ev.Amount > 0 ? "stat_raised" : "stat_lowered", save);
                 PushFeedback(ev, 620f);
             }
-            else if (ev.Type == "passive" && ev.Variant == "charge" && ev.Ready)
+            else if (ev.Type == "passive")
             {
-                string title = FindViewMon(ev.Target)?.Passive?.boostedTitle ?? "SPORE SHOT FULL POWER";
-                LogBattleBanner($"{title.ToUpperInvariant()} READY!");
-                ui.Sound("stat_raised", save);
+                string banner = ev.Variant == "charge" && ev.Ready
+                    ? $"{(FindViewMon(ev.Target)?.Passive?.boostedTitle ?? "SPORE SHOT FULL POWER").ToUpperInvariant()} READY!"
+                    : ev.Text?.ToUpperInvariant();
+                if (!string.IsNullOrEmpty(banner)) LogBattleBanner(banner);
+                if (ev.Ready || !string.IsNullOrEmpty(ev.Text)) ui.Sound("stat_raised", save);
             }
             else if (ev.Type == "sleep") { LogBattleBanner("FAST ASLEEP!"); PushFeedback(ev, 620f); }
             else if (ev.Type == "wake") { LogBattleBanner("WOKE UP!"); ui.Sound("stat_raised", save); }
@@ -331,8 +334,16 @@ namespace Dynamons
                 if (ev.Type == "antidote" || ev.Type == "wake") mon.Status = null;
                 if (ev.Type == "immune" && ev.Variant == "void") mon.VoidStacks = ev.Stacks;
                 if (ev.Type == "immune" && ev.Variant == "shield") mon.Shield = ev.ShieldHits;
+                if (ev.Type == "passive" && ev.Variant == "shield") mon.Shield = ev.ShieldHits;
+                if (ev.Type == "passive" && ev.Variant == "void") mon.VoidStacks = ev.Stacks;
                 if (ev.Type == "passive" && ev.Variant == "ramp") mon.PowerStacks = ev.Stacks;
                 if (ev.Type == "passive" && ev.Variant == "charge") mon.Charges = ev.Charges;
+                if (ev.Type == "stat" && !string.IsNullOrEmpty(ev.Stat))
+                {
+                    if (ev.Stat == "atk") mon.AtkMod += ev.Amount;
+                    else if (ev.Stat == "def") mon.DefMod += ev.Amount;
+                    else if (ev.Stat == "aim") mon.AimMod += ev.Amount;
+                }
                 if (ev.Type == "rage") { mon.Rage = true; mon.Status = null; }
                 if (ev.Type == "rageSpent") mon.Rage = false;
                 if (ev.Type == "mega") mon.Mega = true;
@@ -455,6 +466,14 @@ namespace Dynamons
                     ui.ArtButton(controlsLayer, m.img, bx, by, 55f, 60f, m.act, m.enabled);
                     if (m.isCatch)
                     {
+                        if (m.enabled)
+                        {
+                            var oddsVec = VectorCanvas.Create("CatchOddsVec", controlsLayer, bx - 2f, by - 4f, 34f, 15f);
+                            oddsVec.FillRoundRect(0f, 0f, 34f, 15f, 5f, GameUi.HexColor("#0d2c45", 0.95f));
+                            oddsVec.StrokeRoundRect(0.5f, 0.5f, 33f, 14f, 4.5f, GameUi.HexColor("#57d4ff", 0.95f), 1.2f);
+                            oddsVec.Commit();
+                            fonts.Draw(controlsLayer, "white_stroked_small", $"{battle.CatchOddsPct(battle.Enemy)}%", bx + 15f, by - 1f, 7f, "center", GameUi.HexColor("#94ebff"));
+                        }
                         ui.Art(controlsLayer, "general/badge_red", bx + 34f, by - 4f, 22f, 22f, true);
                         fonts.Draw(controlsLayer, "white_stroked_small", save.Count("discatch").ToString(), bx + 45f, by + 1f, 8f, "center");
                     }
@@ -520,6 +539,14 @@ namespace Dynamons
                 else if (!interactive)
                 {
                     ui.Art(controlsLayer, "session/ui/icon_off", bx, btnY, btnSize, btnSize, true, 0.45f);
+                }
+                if (battle.Enemy != null && move.power > 0 && !string.IsNullOrEmpty(move.effect) && move.effect.Contains("attack"))
+                {
+                    float tipAlpha = ready && interactive ? 1f : 0.6f;
+                    if (GameData.Strong(move.kind, battle.Enemy.Kind))
+                        ui.Art(controlsLayer, "general/huds/tip_strong", bx + (btnSize - 42f) * 0.5f, btnY - 12f, 42f, 13f, true, tipAlpha);
+                    else if (GameData.Strong(battle.Enemy.Kind, move.kind))
+                        ui.Art(controlsLayer, "general/huds/tip_weak", bx + (btnSize - 42f) * 0.5f, btnY - 12f, 42f, 13f, true, tipAlpha);
                 }
             }
         }
@@ -646,6 +673,7 @@ namespace Dynamons
                     new MonHudView { MonId = foe.MonId, Level = foe.Level, Hp = foe.Hp, MaxHp = foe.MaxHp, Status = foe.Status, Rage = foe.Rage },
                     "big", 5f, 68f, hpTrail.TryGetValue(foe.Id, out float tr) ? tr : (float?)null, showHpText: true);
                 if (GameData.HasPassive(foe.Passive)) DrawPassivePill(hudVec, hpHudLayer, foe, 158f, 68f, 112f, 22f);
+                DrawStatStageChips(hudVec, hpHudLayer, foe, 158f, 93f, true);
             }
             if (player != null)
             {
@@ -659,6 +687,7 @@ namespace Dynamons
                     fonts.Draw(hpHudLayer, "white_stroked_small", "MEGA", 188f, 424f, 8f, "center");
                 }
                 if (GameData.HasPassive(player.Passive)) DrawPassivePill(hudVec, hpHudLayer, player, 214f, 419f, 101f, 20f);
+                DrawStatStageChips(hudVec, hpHudLayer, player, 89f, 444f, false);
             }
 
             if (battle.Encounter.Kind != "wild" && !string.IsNullOrEmpty(battle.Encounter.Captain))
@@ -774,6 +803,30 @@ namespace Dynamons
                 textLabel = mon.VoidStacks > 0 ? $"{prefix} x{mon.VoidStacks} {bonPct}%" : $"{prefix} {chPct}%";
             }
             fonts.Draw(parent, "white_stroked_small", textLabel, textMid, y + (h - 7.5f) * 0.5f, 7.5f, "center", null, textW);
+        }
+
+        private void DrawStatStageChips(VectorCanvas vec, Transform parent, CombatantView mon, float startX, float startY, bool horizontal)
+        {
+            if (mon == null || (mon.AtkMod == 0 && mon.DefMod == 0 && mon.AimMod == 0)) return;
+            var entries = new[] { ("ATK", mon.AtkMod), ("DEF", mon.DefMod), ("AIM", mon.AimMod) };
+            float chipW = horizontal ? 48f : 72f, chipH = 14.5f;
+            int idx = 0;
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var (stat, mod) = entries[i];
+                if (mod == 0) continue;
+                bool up = mod > 0;
+                float cx = horizontal ? startX + idx * (chipW + 3f) : startX;
+                float cy = horizontal ? startY : startY + idx * (chipH + 2f);
+                Color bg = GameUi.HexColor(up ? "#0e2f1f" : "#381118", 0.92f);
+                Color border = GameUi.HexColor(up ? "#5ee88b" : "#ff6b78", 0.94f);
+                Color txt = GameUi.HexColor(up ? "#96ffb8" : "#ff9aa3");
+                vec.FillRoundRect(cx, cy, chipW, chipH, 4.5f, bg);
+                vec.StrokeRoundRect(cx + 0.5f, cy + 0.5f, chipW - 1f, chipH - 1f, 4f, border, 1f);
+                string dir = up ? "UP" : "DN";
+                fonts.Draw(parent, "white_stroked_small", $"{stat} {dir} {Math.Abs(mod)}", cx + chipW * 0.5f, cy + 3.5f, 6.4f, "center", txt, chipW - 4f);
+                idx++;
+            }
         }
 
         private void DrawBattleSpeedButton(VectorCanvas vec, Transform parent)

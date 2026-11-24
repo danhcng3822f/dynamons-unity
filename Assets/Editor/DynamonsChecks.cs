@@ -196,6 +196,21 @@ namespace Dynamons
             Check(mixedEvs.Any(e => e.Type == "miss" && e.Missed), "Mixed missable attack emits explicit miss event when missed");
             Check(mixedMissBattle.Enemy.Hp == mixedMissBattle.Enemy.MaxHp, "Missed mixed attack deals no damage to foe");
 
+            // Bad-luck streak protection prevents 3 consecutive misses
+            mixedMissBattle.Apply(new BattleAction("ability", "scratch"));
+            var thirdTry = mixedMissBattle.Apply(new BattleAction("ability", "scratch"));
+            Check(!thirdTry.Any(e => e.Type == "miss"), "Consecutive miss protection guarantees hit on 3rd attempt");
+
+            // Arena, Boss, and late Captain encounters carry SmartAi; Mega triggers passive surge
+            var smartArena = world.Arena(save);
+            Check(smartArena.Ai != null && smartArena.Ai.Heal >= 1, "Arena encounter enables SmartAi");
+            var megaTest = new BattleRules(data, shieldFoe, new[] { OwnedMon.New("squirtle", 14, 100) }, () => .5);
+            megaTest.Player.Shield = 0;
+            var megaEvs = megaTest.Apply(new BattleAction("mega"));
+            Check(megaTest.Player.Shield == 1 && megaEvs.Any(e => e.Type == "passive" && e.Variant == "shield"),
+                "Mega Evolution restores shattered Shell Shield via passive surge");
+            Check(megaTest.CatchOddsPct(megaTest.Enemy) >= 0, "CatchOddsPct computes bounded catch percentage");
+
             foreach (var texPath in new[]
             {
                 "Dynamons/Art/general/huds/pane_big_fire", "Dynamons/Art/session/abilities/fx/blast",

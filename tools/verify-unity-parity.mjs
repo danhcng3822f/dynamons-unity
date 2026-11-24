@@ -235,16 +235,24 @@ function checkFontDesignRulesAndDtoConstraints() {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
       assert.ok(txt.includes('GameData.HasPassive(') && txt.includes('GameData.PassiveKey('), 'BattleView.cs must guard passives with GameData.HasPassive/PassiveKey');
       assert.ok(txt.includes('else if (ev.Type == "miss")'), 'BattleView.cs must render miss feedback immediately in BeginBattleEvent');
+      assert.ok(txt.includes('general/huds/tip_strong') && txt.includes('general/huds/tip_weak'), 'BattleView.cs must show effectiveness hints on move buttons');
     }
     if (file.includes('/Scripts/Unity/') && !file.endsWith('GameUi.cs') && !file.endsWith('GameRoot.cs')) {
       assert.ok(!/\bui\.Label\(/.test(txt), `${rel}: Must use BitmapFontRegistry instead of legacy ui.Label`);
     }
   }
 
+  const buildSettingsTxt = readFileSync(join(assetsDir, 'Editor', 'DynamonsBuildSettings.cs'), 'utf8');
+  assert.ok(buildSettingsTxt.includes('"Dynamons Next"'), 'DynamonsBuildSettings.cs must set productName to Dynamons Next');
+  assert.ok(buildSettingsTxt.includes('PlayerSettings.SplashScreen.show = false'), 'DynamonsBuildSettings.cs must disable Unity SplashScreen');
+  assert.ok(assetExists('splash/app_icon', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/app_icon.png');
+  assert.ok(assetExists('splash/logo', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/logo.png');
+
   for (const wf of ['build-linux.yml', 'build-android.yml']) {
     const wfTxt = readFileSync(join(unityDir, '.github', 'workflows', wf), 'utf8');
     assert.ok(/contents:\s*write/.test(wfTxt), `${wf} must request contents: write for GitHub Releases`);
     assert.ok(wfTxt.includes('gh release upload'), `${wf} must auto-upload build artifact to GitHub Release`);
+    assert.ok(wfTxt.includes('DynamonsNext'), `${wf} must build DynamonsNext artifacts`);
   }
 
   for (const dtoFile of [join(assetsDir, 'Scripts', 'Core', 'GameData.cs'), join(assetsDir, 'Scripts', 'Core', 'SaveData.cs')]) {

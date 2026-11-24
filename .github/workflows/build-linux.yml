@@ -1,4 +1,4 @@
-name: Build Dynamons 2 (Linux x64)
+name: Build Dynamons Next (Linux x64)
 
 on:
   workflow_dispatch:
@@ -29,23 +29,23 @@ jobs:
         with:
           targetPlatform: StandaloneLinux64
           cliVersion: v0.1.77
-          buildName: Dynamons2
+          buildName: DynamonsNext
           buildsPath: build
           versioning: None
 
       - name: Package the Linux player
         run: |
-          test -x build/StandaloneLinux64/Dynamons2.x86_64
-          test -f build/StandaloneLinux64/Dynamons2_Data/il2cpp_data/Metadata/global-metadata.dat
+          test -x build/StandaloneLinux64/DynamonsNext.x86_64
+          test -f build/StandaloneLinux64/DynamonsNext_Data/il2cpp_data/Metadata/global-metadata.dat
           find build/StandaloneLinux64 -name 'GameAssembly.so' -print -quit | grep -q .
-          test ! -d build/StandaloneLinux64/Dynamons2_Data/MonoBleedingEdge
-          tar -C build/StandaloneLinux64 -czf Dynamons2-linux-x64.tar.gz .
+          test ! -d build/StandaloneLinux64/DynamonsNext_Data/MonoBleedingEdge
+          tar -C build/StandaloneLinux64 -czf DynamonsNext-linux-x64.tar.gz .
 
       - name: Upload the build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: Dynamons2-linux-x64
-          path: Dynamons2-linux-x64.tar.gz
+          name: DynamonsNext-linux-x64
+          path: DynamonsNext-linux-x64.tar.gz
           if-no-files-found: error
           retention-days: 14
 
@@ -54,8 +54,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="latest"
-          ASSET="Dynamons2-linux-x64.tar.gz"
-          TITLE="Dynamons 2 Builds (Latest)"
+          ASSET="DynamonsNext-linux-x64.tar.gz"
+          TITLE="Dynamons Next Builds (Latest)"
           NOTES="Automated IL2CPP Linux x64 and Android arm64-v8a builds (commit ${GITHUB_SHA::7})."
           if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" "$ASSET" -R "$GITHUB_REPOSITORY" --target "$GITHUB_REF_NAME" --title "$TITLE" --notes "$NOTES" || true
@@ -68,4 +68,5 @@ jobs:
             sleep 3
           done
           gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$TITLE" --notes "$NOTES" || true
+          gh release delete-asset "$TAG" "Dynamons2-linux-x64.tar.gz" -R "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET"
