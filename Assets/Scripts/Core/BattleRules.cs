@@ -44,6 +44,7 @@ namespace Dynamons
     {
         private readonly GameData data;
         private readonly Func<double> rng;
+        private readonly bool isPvp;
         private readonly HashSet<Combatant> participants = new HashSet<Combatant>(), training = new HashSet<Combatant>(), awarded = new HashSet<Combatant>();
         private readonly List<BattleEvent> events = new List<BattleEvent>();
         private int enemyHeals, enemyAntidotes, enemyPeppers, enemyBerries, lastSwitchTurn = -99;
@@ -72,7 +73,16 @@ namespace Dynamons
             enemyPeppers = encounter.Ai?.Pepper ?? 0; enemyBerries = encounter.Ai?.Berry ?? 0;
         }
 
-        private Combatant Create(MemberSpec spec, string id, int? hp = null, int xp = 0)
+        internal BattleRules(GameData data, Combatant[] party, Combatant[] opponents, Func<double> rng, bool isPvp = false)
+        {
+            this.data = data;
+            this.rng = rng;
+            this.isPvp = isPvp;
+            Party = party;
+            Opponents = opponents;
+        }
+
+        internal static Combatant CreateCombatant(GameData data, MemberSpec spec, string id, int? hp = null, int xp = 0)
         {
             var mon = data.Mon(spec.MonId);
             var basis = spec.Stats ?? data.StatsAt(mon.id, spec.Level, !spec.Sparring);
@@ -84,6 +94,8 @@ namespace Dynamons
                 StatCap = spec.StatCap, Passive = passive, Shield = passive?.type == "shield" ? Math.Max(1, passive.shieldHits) : 0,
                 Moves = data.MovesAt(mon.id, spec.Level) };
         }
+
+        private Combatant Create(MemberSpec spec, string id, int? hp = null, int xp = 0) => CreateCombatant(data, spec, id, hp, xp);
 
         public int Damage(Combatant actor, Combatant target, MoveData move, bool crit = false, bool backfire = false, bool item = false)
         {
@@ -99,9 +111,16 @@ namespace Dynamons
             return GameData.Clamp(GameData.Round(raw * .55), 6, GameData.Round(cap * (crit && !item ? 1.35 : actor.Mega ? 1.2 : 1)));
         }
 
-        private string SideOf(Combatant mon) => mon == null ? null : Party.Contains(mon) ? "player" : "enemy";
+        internal string SideOf(Combatant mon) => mon == null ? null : Party.Contains(mon) ? (isPvp ? "host" : "player") : (isPvp ? "client" : "enemy");
 
-        private void Emit(string type, Combatant target = null, string text = null, int amount = 0, bool hp = false, string stat = null,
+        internal BattleEvent[] DrainEvents()
+        {
+            var copy = events.ToArray();
+            events.Clear();
+            return copy;
+        }
+
+        internal void Emit(string type, Combatant target = null, string text = null, int amount = 0, bool hp = false, string stat = null,
             string abilityId = null, bool fullPower = false, bool backfire = false, bool missed = false, bool success = false, bool ready = false,
             string variant = null, string status = null, int shieldHits = 0, int stacks = 0, int bonusPct = 0, int charges = 0, int threshold = 0) =>
             events.Add(new BattleEvent
@@ -172,7 +191,7 @@ namespace Dynamons
 
         public int CatchOddsPct(Combatant target) => target == null ? 0 : GameData.Clamp(GameData.Round(CatchOdds(target) * 100.0), 0, 100);
 
-        private void TriggerMegaEvolution(Combatant actor)
+        internal void TriggerMegaEvolution(Combatant actor)
         {
             if (actor == null || actor.Mega) return;
             actor.Mega = true;
@@ -224,7 +243,7 @@ namespace Dynamons
             return low.odds + (hp - low.at) * (high.odds - low.odds) / (high.at - low.at);
         }
 
-        private void Tick(Combatant[] team, Combatant active, bool sick)
+        internal void Tick(Combatant[] team, Combatant active, bool sick)
         {
             if (active.Hp > 0)
             {

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.Build;
@@ -268,6 +269,331 @@ namespace Dynamons
                   clientEvent.Stacks == 2 && clientEvent.BonusPct == 20 && clientEvent.Charges == 3 && clientEvent.Threshold == 3 &&
                   clientEvent.Visuals != null && clientEvent.Visuals.Length == 1 && clientEvent.Visuals[0].action == "fx-fire",
                 "LanCodec EventToDto/EventFromDto preserves all BattleEvent fields and flips perspective");
+
+            var neutralEndDto = LanCodec.EventToDto(new BattleEvent { Type = "end", Text = "host", Side = null }, "host");
+            var neutralEndFromDto = LanCodec.EventFromDto(neutralEndDto, "client");
+            Check(neutralEndDto != null && neutralEndDto.side == null && neutralEndFromDto.Side == null,
+                "LanCodec EventToDto preserves neutral null Side on end events");
+
+            // Host-authoritative PvP rules engine checks
+            bool threwEmptyRoster = false;
+            try
+            {
+                new PvpBattleRules(data, Array.Empty<LanTeamMemberDto>(),
+                    new[] { new LanTeamMemberDto { monId = "krimson", level = 5 } }, "fair20", false, () => 0.1);
+            }
+            catch (ArgumentException) { threwEmptyRoster = true; }
+            Check(threwEmptyRoster, "PvpBattleRules rejects empty roster with ArgumentException");
+
+            // 1. Fair20 vs Real normalization + SaveData immutability
+            var pvpSave = SaveData.Create(data, fixtureDay);
+            pvpSave.Team.Add(OwnedMon.New("krimson", 1, 12));
+            pvpSave.Team[0].Xp = 45;
+            pvpSave.Team.Add(OwnedMon.New("leafrog", 18, 37));
+            pvpSave.Team[1].Xp = 99;
+            pvpSave.Add("heal_spray", 1);
+            pvpSave.Add("discatch", 2);
+            int initialSprayCount = pvpSave.Count("heal_spray");
+            var hostRosterInput = pvpSave.Team.Select(m => new LanTeamMemberDto { monId = m.MonId, level = m.Level }).ToArray();
+            var clientRosterInput = new[]
+            {
+                new LanTeamMemberDto { monId = "charmander", level = 3 },
+                new LanTeamMemberDto { monId = "bulbasaur", level = 15 }
+            };
+            var fairRules = new PvpBattleRules(data, hostRosterInput, clientRosterInput, "fair20", true, () => 0.25);
+            Check(fairRules.RuleMode == "fair20" && fairRules.ItemsAllowed &&
+                  fairRules.CurrentTurnSide == "host" && fairRules.Phase == "turn" &&
+                  fairRules.TurnNumber == 1 && fairRules.Seq == 0 && fairRules.ResolvedTurns == 0,
+                "Fair20 PvP initializes expected state and host starter");
+            for (int i = 0; i < fairRules.HostTeam.Length; i++)
+            {
+                var hm = fairRules.HostTeam[i];
+                var cm = fairRules.ClientTeam[i];
+                Check(hm.Id == "host-" + i && cm.Id == "client-" + i, "PvP combatants use host-i and client-i IDs");
+                Check(hm.Level == data.MaxLevel && cm.Level == data.MaxLevel, "Fair20 normalizes all levels to data.MaxLevel");
+                Check(hm.Hp == data.battleData.maxHP && hm.MaxHp == data.battleData.maxHP &&
+                      cm.Hp == data.battleData.maxHP && cm.MaxHp == data.battleData.maxHP,
+                    "Fair20 normalizes all HP to MaxHp");
+                Check(hm.Base.atk < 150 && hm.Base.def < 150 && hm.Base.aim < 150 &&
+                      cm.Base.atk < 150 && cm.Base.def < 150 && cm.Base.aim < 150,
+                    "Fair20 Lv 20 base stats stay under StatCap 150");
+                Check(hm.Moves.Length == data.MovesAt(hm.MonId, data.MaxLevel).Length &&
+                      cm.Moves.Length == data.MovesAt(cm.MonId, data.MaxLevel).Length,
+                    "Fair20 unlocks all moves at MaxLevel");
+            }
+            var startDto = fairRules.BuildStartMatch();
+            Check(startDto.ruleMode == "fair20" && startDto.itemsAllowed && startDto.startingSide == "host" &&
+                  startDto.hostTeam.Length == 2 && startDto.clientTeam.Length == 2 &&
+                  startDto.hostTeam[0].id == "host-0" && startDto.clientTeam[0].id == "client-0" &&
+                  startDto.hostTeam[0].level == data.MaxLevel &&
+                  startDto.hostItems.Any(s => s.id == "heal_spray" && s.count == 2) &&
+                  startDto.clientItems.Any(s => s.id == "heal_spray" && s.count == 2),
+                "BuildStartMatch exports normalized teams, startingSide, and standardized pouches");
+            Check(pvpSave.Team[0].Level == 1 && pvpSave.Team[0].Hp == 12 && pvpSave.Team[0].Xp == 45 &&
+                  pvpSave.Team[1].Level == 18 && pvpSave.Team[1].Hp == 37 &&
+                  pvpSave.Count("heal_spray") == initialSprayCount && pvpSave.Count("discatch") == 2,
+                "PvP initialization leaves original SaveData Team and Inventory untouched");
+
+            var realRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 1 } },
+                new[] { new LanTeamMemberDto { monId = "leafrog", level = 18 } },
+                "real", false, () => 0.8);
+            Check(realRules.RuleMode == "real" && !realRules.ItemsAllowed &&
+                  realRules.CurrentTurnSide == "client" &&
+                  realRules.HostTeam[0].Level == 1 && realRules.ClientTeam[0].Level == 18 &&
+                  realRules.HostTeam[0].Hp == data.battleData.maxHP &&
+                  realRules.PouchCount("host", "heal_spray") == 0,
+                "Real mode preserves clamped levels, selects client starter when rng >= 0.5, and disables items");
+
+            // 2. Strict turn authority & seq validation
+            Check(fairRules.SubmitAction("client", new LanActionCmdDto { seq = 0, actionType = "ability", id = fairRules.ClientTeam[0].Moves[0].id }) == null,
+                "Out-of-turn action rejected");
+            Check(fairRules.SubmitAction("host", new LanActionCmdDto { seq = 1, actionType = "ability", id = "hellfire" }) == null,
+                "Mismatched seq rejected");
+            Check(fairRules.Seq == 0 && fairRules.TurnNumber == 1 && fairRules.CurrentTurnSide == "host",
+                "Rejected actions do not advance Seq, TurnNumber, or CurrentTurnSide");
+
+            // 3. Voluntary switch during turn swaps slot, emits switch, ticks cooldowns, and advances turn
+            var cdRes = fairRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "hellfire" });
+            Check(cdRes != null && cdRes.seq == 0 && cdRes.turnEnded && cdRes.nextTurnSide == "client" &&
+                  fairRules.Seq == 1 && fairRules.TurnNumber == 2 && fairRules.ResolvedTurns == 1,
+                "Valid host ability resolves and advances seq/turn");
+            Check(fairRules.SubmitAction("client", new LanActionCmdDto { seq = 0, actionType = "ability", id = fairRules.ClientTeam[0].Moves[0].id }) == null,
+                "Stale seq=0 rejected after turn advanced");
+            int hellfireCdAfterAttack = fairRules.HostTeam[0].Cooldowns["hellfire"];
+            var clientAtkRes = fairRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "ability", id = "enflame" });
+            Check(clientAtkRes != null && clientAtkRes.nextTurnSide == "host" && fairRules.Seq == 2,
+                "Client turn resolves cleanly");
+            var volSwitchRes = fairRules.SubmitAction("host", new LanActionCmdDto { seq = 2, actionType = "switch", index = 1 });
+            Check(volSwitchRes != null && volSwitchRes.activeHostSlot == 1 && volSwitchRes.turnEnded &&
+                  volSwitchRes.nextTurnSide == "client" && fairRules.HostSlot == 1 &&
+                  fairRules.CurrentTurnSide == "client" && fairRules.TurnNumber == 4 &&
+                  volSwitchRes.events.Any(e => e.type == "switch" && e.side == "host" && e.target == "host-1") &&
+                  fairRules.HostTeam[0].Cooldowns["hellfire"] == hellfireCdAfterAttack - 1,
+                "Voluntary switch swaps slot, emits switch, ticks bench cooldowns, and ends turn");
+
+            // 4. ForcedSwitch on KO & replacement switch
+            var koRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 }, new LanTeamMemberDto { monId = "leafrog", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "charmander", level = 20 }, new LanTeamMemberDto { monId = "bulbasaur", level = 20 } },
+                "fair20", false, () => 0.25);
+            koRules.ClientTeam[0].Hp = 1;
+            var koRes = koRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "hellfire" });
+            Check(koRes != null && koRes.phase == "forced_switch" && koRes.forcedSwitchSide == "client" && !koRes.turnEnded &&
+                  koRules.Phase == "forced_switch" && koRules.ForcedSwitchSide == "client" && koRules.ResolvedTurns == 1,
+                "KO with living bench enters forced_switch for defender without ending turn");
+            Check(koRules.SubmitAction("host", new LanActionCmdDto { seq = 1, actionType = "switch", index = 1 }) == null,
+                "Non-forced side cannot switch during forced_switch");
+            Check(koRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "ability", id = "enflame" }) == null,
+                "Defender cannot use ability during forced_switch");
+            Check(koRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "switch", index = 0 }) == null,
+                "Defender cannot switch to fainted slot during forced_switch");
+            var repRes = koRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "switch", index = 1 });
+            Check(repRes != null && repRes.phase == "turn" && repRes.forcedSwitchSide == "" &&
+                  repRes.nextTurnSide == "client" && repRes.activeClientSlot == 1 && repRes.turnEnded &&
+                  koRules.Phase == "turn" && koRules.CurrentTurnSide == "client" && koRules.ClientSlot == 1 &&
+                  koRules.TurnNumber == 2,
+                "Forced replacement switch returns to turn phase and gives turn to defender");
+
+            // 5a. Self-KO via hypno backfire triggers forced_switch on actorSide and hands turn to defender
+            var backfireRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 }, new LanTeamMemberDto { monId = "leafrog", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "charmander", level = 20 }, new LanTeamMemberDto { monId = "bulbasaur", level = 20 } },
+                "fair20", false, () => 0.25);
+            backfireRules.HostTeam[0].Status = "hypno";
+            backfireRules.HostTeam[0].Hp = 1;
+            backfireRules.HostTeam[1].Cooldowns["earth_shield"] = 2;
+            var bfRes = backfireRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "hellfire" });
+            Check(bfRes != null && bfRes.phase == "forced_switch" && bfRes.forcedSwitchSide == "host" && !bfRes.turnEnded &&
+                  backfireRules.ClientTeam[0].Hp == backfireRules.ClientTeam[0].MaxHp &&
+                  backfireRules.HostTeam[1].Cooldowns["earth_shield"] == 1 &&
+                  bfRes.events.Any(e => e.type == "hypno" && e.backfire && e.side == "host") &&
+                  bfRes.events.Any(e => e.type == "faint" && e.target == "host-0"),
+                "Hypno backfire self-KO triggers forced_switch on actorSide, ticks bench cooldowns, and spares defender");
+            var bfSwitch = backfireRules.SubmitAction("host", new LanActionCmdDto { seq = 1, actionType = "switch", index = 1 });
+            Check(bfSwitch != null && bfSwitch.phase == "turn" && bfSwitch.nextTurnSide == "client" && bfSwitch.turnEnded &&
+                  backfireRules.CurrentTurnSide == "client" && backfireRules.HostSlot == 1,
+                "Post-backfire replacement switch hands turn to defender");
+
+            // 5b. Self-KO via sick tick triggers forced_switch on actorSide and hands turn to defender
+            var sickRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 }, new LanTeamMemberDto { monId = "leafrog", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "charmander", level = 20 }, new LanTeamMemberDto { monId = "bulbasaur", level = 20 } },
+                "fair20", false, () => 0.25);
+            sickRules.HostTeam[0].Status = "sick";
+            sickRules.HostTeam[0].Hp = 1;
+            var sickRes = sickRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "scratch" });
+            Check(sickRes != null && sickRes.phase == "forced_switch" && sickRes.forcedSwitchSide == "host" && !sickRes.turnEnded &&
+                  sickRes.events.Any(e => e.type == "faint" && e.target == "host-0"),
+                "Sick tick self-KO triggers forced_switch on actorSide");
+            var sickSwitch = sickRules.SubmitAction("host", new LanActionCmdDto { seq = 1, actionType = "switch", index = 1 });
+            Check(sickSwitch != null && sickSwitch.phase == "turn" && sickSwitch.nextTurnSide == "client" && sickSwitch.turnEnded,
+                "Post-sick replacement switch hands turn to defender");
+
+            // 5c. Pending sick tick killing attacker AFTER defender forced switch completes
+            var dualKoRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 }, new LanTeamMemberDto { monId = "leafrog", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "charmander", level = 20 }, new LanTeamMemberDto { monId = "bulbasaur", level = 20 } },
+                "fair20", false, () => 0.25);
+            dualKoRules.HostTeam[0].Status = "sick";
+            dualKoRules.HostTeam[0].Hp = 1;
+            dualKoRules.ClientTeam[0].Hp = 1;
+            var dualFirst = dualKoRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "hellfire" });
+            Check(dualFirst != null && dualFirst.phase == "forced_switch" && dualFirst.forcedSwitchSide == "client",
+                "Attacker KOing defender enters defender forced_switch before attacker sick tick");
+            var dualSecond = dualKoRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "switch", index = 1 });
+            Check(dualSecond != null && dualSecond.phase == "forced_switch" && dualSecond.forcedSwitchSide == "host" &&
+                  dualSecond.events.Any(e => e.type == "faint" && e.target == "host-0"),
+                "Pending sick tick after defender switch triggers actor forced_switch");
+            var dualThird = dualKoRules.SubmitAction("host", new LanActionCmdDto { seq = 2, actionType = "switch", index = 1 });
+            Check(dualThird != null && dualThird.phase == "turn" && dualThird.nextTurnSide == "client" && dualThird.turnEnded,
+                "Both replacements resolve cleanly back to turn phase for defender");
+
+            // 5d. Sleep turn symmetry (isPvp=true): both host and client sleep exact 2 turns
+            var hostSleepRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "hyperbug", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 } },
+                "fair20", false, () => 0.4);
+            hostSleepRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "slumber_hex" });
+            Check(hostSleepRules.ClientTeam[0].Status == "sleep" && hostSleepRules.ClientTeam[0].SleepTurns == 2 && !hostSleepRules.ClientTeam[0].SleepFresh,
+                "Host sleeping Client sets SleepTurns=2 and SleepFresh=false in PvP");
+            var cSleep1 = hostSleepRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "ability", id = "scratch" });
+            Check(cSleep1.events.Any(e => e.type == "sleep") && hostSleepRules.ClientTeam[0].Status == "sleep" && hostSleepRules.ClientTeam[0].SleepTurns == 1,
+                "Client misses turn 1 of sleep and ticks SleepTurns 2->1");
+            hostSleepRules.SubmitAction("host", new LanActionCmdDto { seq = 2, actionType = "ability", id = "gloom_veil" });
+            var cSleep2 = hostSleepRules.SubmitAction("client", new LanActionCmdDto { seq = 3, actionType = "ability", id = "scratch" });
+            Check(cSleep2.events.Any(e => e.type == "sleep") && cSleep2.events.Any(e => e.type == "wake") &&
+                  hostSleepRules.ClientTeam[0].Status == null && hostSleepRules.ClientTeam[0].SleepTurns == 0,
+                "Client misses turn 2 of sleep and wakes up at end of 2nd slept turn");
+            hostSleepRules.SubmitAction("host", new LanActionCmdDto { seq = 4, actionType = "ability", id = "shadow_claw" });
+            var cAwake = hostSleepRules.SubmitAction("client", new LanActionCmdDto { seq = 5, actionType = "ability", id = "scratch" });
+            Check(cAwake != null && !cAwake.events.Any(e => e.type == "sleep") && cAwake.events.Any(e => e.type == "damage"),
+                "Client acts normally after waking from 2-turn sleep");
+
+            var clientSleepRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "hyperbug", level = 20 } },
+                "fair20", false, () => 0.6);
+            clientSleepRules.SubmitAction("client", new LanActionCmdDto { seq = 0, actionType = "ability", id = "slumber_hex" });
+            Check(clientSleepRules.HostTeam[0].Status == "sleep" && clientSleepRules.HostTeam[0].SleepTurns == 2 && !clientSleepRules.HostTeam[0].SleepFresh,
+                "Client sleeping Host symmetrically sets SleepTurns=2 and SleepFresh=false in PvP");
+            var hSleep1 = clientSleepRules.SubmitAction("host", new LanActionCmdDto { seq = 1, actionType = "ability", id = "scratch" });
+            Check(hSleep1.events.Any(e => e.type == "sleep") && clientSleepRules.HostTeam[0].Status == "sleep" && clientSleepRules.HostTeam[0].SleepTurns == 1,
+                "Host misses turn 1 of sleep symmetrically");
+            clientSleepRules.SubmitAction("client", new LanActionCmdDto { seq = 2, actionType = "ability", id = "gloom_veil" });
+            var hSleep2 = clientSleepRules.SubmitAction("host", new LanActionCmdDto { seq = 3, actionType = "ability", id = "scratch" });
+            Check(hSleep2.events.Any(e => e.type == "sleep") && hSleep2.events.Any(e => e.type == "wake") &&
+                  clientSleepRules.HostTeam[0].Status == null,
+                "Host wakes symmetrically after 2 slept turns");
+
+            // Self-sleep via hypno backfire preserves SleepFresh during same-turn Tick so SleepTurns remains 2
+            var bfSleepRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "hyperbug", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 } },
+                "fair20", false, () => 0.25);
+            bfSleepRules.HostTeam[0].Status = "hypno";
+            bfSleepRules.HostTeam[0].Base.aim = 100;
+            bfSleepRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "slumber_hex" });
+            Check(bfSleepRules.HostTeam[0].Status == "sleep" && bfSleepRules.HostTeam[0].SleepTurns == 2 && !bfSleepRules.HostTeam[0].SleepFresh,
+                "Hypno backfire self-sleep preserves 2 full sleep turns after same-turn Tick");
+
+            // 6. Mega once per team, passive surge, preserves turn (turnEnded=false), second Mega rejected
+            var megaRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "squirtle", level = 20 }, new LanTeamMemberDto { monId = "charmander", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 } },
+                "fair20", false, () => 0.25);
+            megaRules.HostTeam[0].Shield = 0;
+            Check(megaRules.CanMega("host") && megaRules.CanMega("client"), "Both sides start Mega-eligible");
+            var megaRes = megaRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "mega" });
+            Check(megaRes != null && !megaRes.turnEnded && megaRes.nextTurnSide == "host" && megaRes.phase == "turn" &&
+                  megaRes.events.Any(e => e.type == "mega" && e.side == "host") &&
+                  megaRes.events.Any(e => e.type == "passive" && e.variant == "shield") &&
+                  megaRules.HostTeam[0].Mega && megaRules.HostTeam[0].Shield == 1 && !megaRules.CanMega("host"),
+                "Mega restores Shield via passive surge, keeps turn (turnEnded=false), and disables team Mega");
+            Check(megaRules.SubmitAction("host", new LanActionCmdDto { seq = 1, actionType = "mega" }) == null,
+                "Second Mega on same mon rejected");
+            megaRules.SubmitAction("host", new LanActionCmdDto { seq = 1, actionType = "switch", index = 1 });
+            megaRules.SubmitAction("client", new LanActionCmdDto { seq = 2, actionType = "ability", id = "scratch" });
+            Check(!megaRules.CanMega("host") && megaRules.SubmitAction("host", new LanActionCmdDto { seq = 3, actionType = "mega" }) == null,
+                "Mega remains locked across the entire team after switching");
+
+            // 7. Catch forbidden; itemsAllowed=false vs isolated PvP pouch
+            Check(megaRules.SubmitAction("host", new LanActionCmdDto { seq = 3, actionType = "catch" }) == null,
+                "Catch is forbidden in PvP");
+            Check(megaRules.SubmitAction("host", new LanActionCmdDto { seq = 3, actionType = "item", id = "heal_spray" }) == null,
+                "Item is rejected when itemsAllowed=false");
+
+            var itemRules = new PvpBattleRules(data, hostRosterInput, clientRosterInput, "fair20", true, () => 0.25);
+            Check(itemRules.PouchCount("host", "heal_spray") == 2 && itemRules.PouchCount("host", "antidote") == 1 &&
+                  itemRules.PouchCount("host", "atk_pepper") == 1 && itemRules.PouchCount("host", "def_berry") == 1 &&
+                  itemRules.PouchCount("host", "discatch") == 0,
+                "Standardized PvP pouch initialized cleanly when itemsAllowed=true");
+            Check(itemRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "catch" }) == null,
+                "Catch remains forbidden even when itemsAllowed=true");
+            Check(itemRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "item", id = "discatch" }) == null,
+                "Discatch item is rejected even when itemsAllowed=true");
+            itemRules.HostTeam[0].Hp = 20;
+            var healRes = itemRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "item", id = "heal_spray" });
+            Check(healRes != null && healRes.turnEnded && healRes.nextTurnSide == "client" &&
+                  itemRules.HostTeam[0].Hp == 70 && itemRules.PouchCount("host", "heal_spray") == 1 &&
+                  itemRules.PouchCount("client", "heal_spray") == 2 &&
+                  pvpSave.Count("heal_spray") == initialSprayCount,
+                "PvP heal_spray heals 50 HP from isolated pouch without mutating SaveData.Inventory");
+            itemRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "ability", id = "enflame" });
+            itemRules.SubmitAction("host", new LanActionCmdDto { seq = 2, actionType = "item", id = "heal_spray" });
+            itemRules.SubmitAction("client", new LanActionCmdDto { seq = 3, actionType = "ability", id = "heatwave" });
+            Check(itemRules.PouchCount("host", "heal_spray") == 0 &&
+                  itemRules.SubmitAction("host", new LanActionCmdDto { seq = 4, actionType = "item", id = "heal_spray" }) == null,
+                "Depleted PvP pouch item cannot be reused");
+            itemRules.HostTeam[0].Status = "sleep";
+            var antidoteRes = itemRules.SubmitAction("host", new LanActionCmdDto { seq = 4, actionType = "item", id = "antidote" });
+            Check(antidoteRes != null && itemRules.HostTeam[0].Status == null && itemRules.PouchCount("host", "antidote") == 0,
+                "PvP antidote clears status and consumes 1 pouch charge");
+
+            // 8. ResolveTimeoutFallback in turn (ability & cooldown-exhausted switch) and forced_switch
+            var timeoutRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 }, new LanTeamMemberDto { monId = "leafrog", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "charmander", level = 20 }, new LanTeamMemberDto { monId = "bulbasaur", level = 20 } },
+                "fair20", false, () => 0.25);
+            var toTurn = timeoutRules.ResolveTimeoutFallback();
+            Check(toTurn != null && toTurn.seq == 0 && toTurn.actorSide == "host" && toTurn.nextTurnSide == "client" && timeoutRules.Seq == 1,
+                "ResolveTimeoutFallback executes ready ability in turn phase and advances Seq");
+            foreach (var mv in timeoutRules.ClientTeam[0].Moves) timeoutRules.ClientTeam[0].Cooldowns[mv.id] = 2;
+            var toSwitchTurn = timeoutRules.ResolveTimeoutFallback();
+            Check(toSwitchTurn != null && toSwitchTurn.actorSide == "client" && toSwitchTurn.activeClientSlot == 1 &&
+                  toSwitchTurn.nextTurnSide == "host" && timeoutRules.ClientSlot == 1,
+                "ResolveTimeoutFallback falls back to alive bench switch when all moves on cooldown");
+            timeoutRules.ClientTeam[1].Hp = 1;
+            timeoutRules.SubmitAction("host", new LanActionCmdDto { seq = 2, actionType = "ability", id = "hellfire" });
+            Check(timeoutRules.Phase == "forced_switch" && timeoutRules.ForcedSwitchSide == "client",
+                "Setup forced_switch for timeout fallback test");
+            var toForced = timeoutRules.ResolveTimeoutFallback();
+            Check(toForced != null && toForced.phase == "turn" && toForced.forcedSwitchSide == "" &&
+                  toForced.activeClientSlot == 0 && toForced.nextTurnSide == "client" &&
+                  timeoutRules.Phase == "turn" && timeoutRules.ClientSlot == 0,
+                "ResolveTimeoutFallback picks first alive bench mon in forced_switch and exits to turn");
+
+            // 9. Forfeit & Turn-1 KO ResolvedTurns anti-farm checks
+            var forfeitRules = new PvpBattleRules(data, hostRosterInput, clientRosterInput, "fair20", false, () => 0.25);
+            var ffRes = forfeitRules.Forfeit("host");
+            Check(ffRes != null && ffRes.phase == "ended" && ffRes.outcome == "client" &&
+                  forfeitRules.Phase == "ended" && forfeitRules.Outcome == "client" && forfeitRules.ResolvedTurns == 0 &&
+                  ffRes.events.Any(e => e.type == "escape" && e.side == "host") &&
+                  ffRes.events.Any(e => e.type == "end" && e.text == "client" && e.side == null),
+                "Forfeit ends match with opponent outcome, escape event, neutral end event, and 0 ResolvedTurns");
+            Check(forfeitRules.SubmitAction("client", new LanActionCmdDto { seq = 1, actionType = "ability", id = "scratch" }) == null &&
+                  forfeitRules.ResolveTimeoutFallback() == null && forfeitRules.Forfeit("client") == null,
+                "Ended match rejects further SubmitAction, ResolveTimeoutFallback, and Forfeit");
+
+            var oneHitKoRules = new PvpBattleRules(data,
+                new[] { new LanTeamMemberDto { monId = "krimson", level = 20 } },
+                new[] { new LanTeamMemberDto { monId = "charmander", level = 20 } },
+                "fair20", false, () => 0.25);
+            oneHitKoRules.ClientTeam[0].Hp = 1;
+            var winRes = oneHitKoRules.SubmitAction("host", new LanActionCmdDto { seq = 0, actionType = "ability", id = "hellfire" });
+            Check(winRes != null && winRes.phase == "ended" && winRes.outcome == "host" &&
+                  oneHitKoRules.Phase == "ended" && oneHitKoRules.Outcome == "host" && oneHitKoRules.ResolvedTurns == 1,
+                "1v1 Turn-1 KO ends match with Outcome==host and ResolvedTurns==1");
 
             Debug.Log("Dynamons rules & parity checks passed.");
         }

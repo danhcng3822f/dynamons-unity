@@ -238,7 +238,7 @@ namespace Dynamons
                 ? (!string.IsNullOrEmpty(wireSide) ? wireSide : "player")
                 : ev.Side == "enemy"
                     ? (!string.IsNullOrEmpty(wireSide) ? FlipSide(wireSide) : "enemy")
-                    : !string.IsNullOrEmpty(ev.Side) ? ev.Side : wireSide;
+                    : ev.Side;
 
             return new LanEventDto
             {

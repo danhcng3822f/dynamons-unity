@@ -17,7 +17,7 @@ namespace Dynamons
             Emit("faint", target, "FAINTED!", hp: true);
         }
 
-        private void Resolve(Combatant actor, Combatant defender, MoveData move, int? healOverride = null)
+        internal void Resolve(Combatant actor, Combatant defender, MoveData move, int? healOverride = null)
         {
             var ops = move.effect.Split(',').Select(value => value.Trim()).Where(value => value.Length != 0).ToArray();
             bool item = move.id.StartsWith("item-", StringComparison.Ordinal) || move.id.StartsWith("can-", StringComparison.Ordinal);
@@ -95,7 +95,7 @@ namespace Dynamons
                         if ((full && op == "state_hypno" || move.chance >= 1 || rng() < move.chance) && target.Hp > 0)
                         {
                             target.Rage = false; target.RageTurns = 0; ClearStatus(target); target.Status = op.Substring(6);
-                            if (target.Status == "sleep") { target.SleepTurns = 2; target.SleepFresh = backfire || Opponents.Contains(actor); }
+                            if (target.Status == "sleep") { target.SleepTurns = 2; target.SleepFresh = backfire || (!isPvp && Opponents.Contains(actor)); }
                             Emit("status", target, target.Status.ToUpperInvariant(), status: target.Status);
                         }
                         break;
