@@ -9,6 +9,7 @@ namespace Dynamons
 {
     internal sealed class GameUi
     {
+        public const float Width = 320f, Height = 568f;
         public static readonly Color Ink = new Color32(22, 34, 49, 255), Panel = new Color32(42, 61, 83, 255), Gold = new Color32(253, 199, 80, 255), Green = new Color32(28, 113, 69, 255);
         public RectTransform Frame { get; }
         private readonly Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
@@ -69,20 +70,117 @@ namespace Dynamons
         }
         private Texture2D Texture(string path)
         {
-            if (!textures.TryGetValue(path, out var texture)) textures[path] = texture = Resources.Load<Texture2D>("Dynamons/Art/" + path);
+            if (string.IsNullOrEmpty(path)) return null;
+            if (!textures.TryGetValue(path, out var texture))
+            {
+                texture = Resources.Load<Texture2D>("Dynamons/Art/" + path);
+                if (texture != null) texture.wrapMode = TextureWrapMode.Clamp;
+                textures[path] = texture;
+            }
             return texture;
         }
-        public RawImage Art(Transform parent, string path, float x, float y, float w, float h, bool contain = false)
+        public Vector2 ArtSize(string path)
         {
             var texture = Texture(path);
-            if (texture != null && contain)
+            return texture != null ? new Vector2(texture.width, texture.height) : Vector2.zero;
+        }
+        public RawImage Art(Transform parent, string path, float x, float y, float w, float h, bool contain = false, float alpha = 1f, bool flipX = false)
+        {
+            var texture = Texture(path);
+            if (texture != null && contain && texture.width > 0 && texture.height > 0 && w > 0 && h > 0)
             {
                 float scale = Mathf.Min(w / texture.width, h / texture.height);
-                x += (w - texture.width * scale) / 2; y += (h - texture.height * scale) / 2;
+                x += (w - texture.width * scale) * 0.5f; y += (h - texture.height * scale) * 0.5f;
                 w = texture.width * scale; h = texture.height * scale;
             }
-            var image = Box(path, parent, x, y, w, h).gameObject.AddComponent<RawImage>(); image.texture = texture;
-            image.raycastTarget = false; image.enabled = texture != null; return image;
+            var image = Box(path ?? "Art", parent, x, y, w, h).gameObject.AddComponent<RawImage>();
+            image.texture = texture;
+            image.color = new Color(1f, 1f, 1f, Mathf.Clamp01(alpha));
+            if (flipX) image.uvRect = new Rect(1f, 0f, -1f, 1f);
+            image.raycastTarget = false;
+            image.enabled = texture != null;
+            return image;
+        }
+        public RawImage ArtFit(Transform parent, string path, float x, float y, float w, float h, float alpha = 1f)
+        {
+            var texture = Texture(path);
+            if (texture != null && texture.width > 0 && texture.height > 0 && w > 0 && h > 0)
+            {
+                float scale = Mathf.Max(w / texture.width, h / texture.height);
+                float dw = texture.width * scale, dh = texture.height * scale;
+                return Art(parent, path, x + (w - dw) * 0.5f, y + (h - dh) * 0.5f, dw, dh, false, alpha);
+            }
+            return Art(parent, path, x, y, w, h, false, alpha);
+        }
+        public RawImage ArtCell(Transform parent, string path, int cols, int rows, int frameIdx, float x, float y, float w, float h, float alpha = 1f, float rotationDeg = 0f, bool alignBottom = false, bool flipX = false)
+        {
+            cols = Mathf.Max(1, cols);
+            rows = Mathf.Max(1, rows);
+            int total = cols * rows;
+            int idx = ((frameIdx % total) + total) % total;
+            int col = idx % cols;
+            int row = idx / cols;
+            var texture = Texture(path);
+            float dx = x, dy = y, dw = w, dh = h;
+            if (texture != null && texture.width > 0 && texture.height > 0 && w > 0 && h > 0)
+            {
+                float cellW = texture.width / (float)cols;
+                float cellH = texture.height / (float)rows;
+                float scale = Mathf.Min(w / cellW, h / cellH);
+                dw = cellW * scale;
+                dh = cellH * scale;
+                dx = x + (w - dw) * 0.5f;
+                dy = alignBottom ? y + (h - dh) : y + (h - dh) * 0.5f;
+            }
+            var box = Box(path ?? "ArtCell", parent, dx, dy, dw, dh);
+            if (Mathf.Abs(rotationDeg) > 0.001f)
+            {
+                box.pivot = new Vector2(0.5f, 0.5f);
+                box.anchoredPosition = new Vector2(dx + dw * 0.5f, -(dy + dh * 0.5f));
+                box.localEulerAngles = new Vector3(0f, 0f, -rotationDeg);
+            }
+            var image = box.gameObject.AddComponent<RawImage>();
+            image.texture = texture;
+            image.color = new Color(1f, 1f, 1f, Mathf.Clamp01(alpha));
+            float uw = 1f / cols, uh = 1f / rows;
+            float u = flipX ? (col + 1) * uw : col * uw;
+            float v = 1f - (row + 1) * uh;
+            image.uvRect = new Rect(u, v, flipX ? -uw : uw, uh);
+            image.raycastTarget = false;
+            image.enabled = texture != null;
+            return image;
+        }
+        public Button ArtButton(Transform parent, string artPath, float x, float y, float w, float h, Action onClick, bool enabled = true, float alpha = 1f, string name = null)
+        {
+            var hit = Box(name ?? artPath ?? "ArtButton", parent, x, y, w, h).gameObject.AddComponent<Image>();
+            hit.color = Color.clear;
+            hit.raycastTarget = true;
+            var button = hit.gameObject.AddComponent<Button>();
+            button.targetGraphic = hit;
+            button.transition = Selectable.Transition.None;
+            button.interactable = enabled;
+            if (onClick != null) button.onClick.AddListener(() => onClick());
+            if (!string.IsNullOrEmpty(artPath))
+                Art(hit.transform, artPath, 0f, 0f, w, h, true, enabled ? alpha : alpha * 0.45f);
+            return button;
+        }
+        public Button HitBox(Transform parent, float x, float y, float w, float h, Action onClick = null)
+        {
+            var hit = Fill(parent, Color.clear, x, y, w, h, true);
+            var button = hit.gameObject.AddComponent<Button>();
+            button.targetGraphic = hit;
+            button.transition = Selectable.Transition.None;
+            if (onClick != null) button.onClick.AddListener(() => onClick());
+            return button;
+        }
+        public static Color HexColor(string hex, float alpha = 1f)
+        {
+            if (!string.IsNullOrEmpty(hex) && ColorUtility.TryParseHtmlString(hex, out var color))
+            {
+                color.a *= Mathf.Clamp01(alpha);
+                return color;
+            }
+            return new Color(1f, 1f, 1f, Mathf.Clamp01(alpha));
         }
         public Text Label(Transform parent, string content, float x, float y, float w, float h, int size = 14, Color? color = null, TextAnchor alignment = TextAnchor.MiddleCenter)
         {
