@@ -13,6 +13,7 @@ namespace Dynamons
         public MapData mapData;
         public ArenaData arenaData;
         public LootData loot;
+        public string shopMessage;
         public Product[] products;
         public BattleData battleData;
         public Tutorial tutorial;
@@ -25,6 +26,7 @@ namespace Dynamons
         public MapNode Node(int id) => Array.Find(mapNodes, row => row.id == id);
         public MapPack Pack(string id) => Array.Find(mapPacks, row => row.id == id);
         public Dialogue Dialog(string id) => Array.Find(dialogs, row => row.id == id);
+        public FontData Font(string id) => Array.Find(fonts, row => row.id == id);
         public int MaxLevel => mons.Max(row => row.lvlTable.Length);
 
         public MoveData[] MovesAt(string id, int level)
@@ -143,7 +145,8 @@ namespace Dynamons
     [Serializable] public sealed class LootData { public LootRow[] availLoot; public CoinRange[] wildAmounts, captainAmounts; }
     [Serializable] public sealed class LootRow : AdvanceRow { public PoolRow[] loot; }
     [Serializable] public sealed class CoinRange { public int distFromAdvance; public IntRange coins; }
-    [Serializable] public sealed class Product : Named { public int price; public LootStep[] loot; }
+    [Serializable] public sealed class Product : Named { public int price; public string lootTitle; public DisplayReward[] displayRewards; public LootStep[] loot; }
+    [Serializable] public sealed class DisplayReward { public string icon, note; }
     [Serializable] public sealed class LootStep { public int amount; public PoolRow[] pool; }
     [Serializable] public sealed class BattleData
     {
@@ -160,5 +163,7 @@ namespace Dynamons
     [Serializable] public sealed class XpRow { public int delta, xp; }
     [Serializable] public sealed class Dialogue { public string id; public DialogueLine[] content; }
     [Serializable] public sealed class DialogueLine { public string who, text; }
-    [Serializable] public sealed class FontData { public string id; public int capTop, baseline; public int[] chars; }
+    [Serializable] public struct GlyphMetric { public int code, w, h, top, bottom; }
+    [Serializable] public struct KernPair { public int left, right; public float adjust; }
+    [Serializable] public sealed class FontData { public string id; public int capTop, baseline; public int[] chars; public GlyphMetric[] glyphs; public KernPair[] kerns; }
 }

@@ -106,10 +106,14 @@ namespace Dynamons
                 Taunt = Pick(data.mapData.captainTaunts.FirstOrDefault(row => row.name == captain)?.pool), Rewards = Rewards(advance, pack.advance, true) };
         }
 
-        private Encounter Wild(MapNode node, int advance)
+        public Encounter Wild(MapNode node, int advance)
         {
             var pack = data.Pack(node.pack);
-            var row = Weight(pack.availMons, m => m.odds) ?? pack.availMons.FirstOrDefault();
+            var source = (node.availMons != null && node.availMons.Length > 0)
+                ? node.availMons
+                : (pack.availMons ?? Array.Empty<PoolRow>()).Concat(node.alsoAvailMons ?? Array.Empty<PoolRow>()).ToArray();
+            var pool = source.Where(row => string.IsNullOrEmpty(row.onlyFor) || row.onlyFor == "wild").ToArray();
+            var row = Weight(pool, m => m.odds) ?? pool.FirstOrDefault();
             if (row == null) return new Encounter { Node = node };
             return new Encounter { Node = node, Kind = "wild", CanCapture = true, Background = node.bg,
                 Members = new[] { new MemberSpec { MonId = row.id, Level = Roll(row.levels) } }, Rewards = Rewards(advance, pack.advance, false) };

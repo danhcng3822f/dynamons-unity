@@ -81,6 +81,7 @@ namespace Dynamons
             if (node != null && encounter.Kind != "training")
             {
                 if (!Save.ClearedNodes.Contains(node.id)) Save.ClearedNodes.Add(node.id);
+                if (!string.IsNullOrEmpty(node.pack) && !Save.UnlockedPacks.Contains(node.pack)) Save.UnlockedPacks.Add(node.pack);
                 if (!string.IsNullOrEmpty(node.unlocksPack) && !Save.UnlockedPacks.Contains(node.unlocksPack)) Save.UnlockedPacks.Add(node.unlocksPack);
                 Save.Advance = Math.Max(Save.Advance, Save.UnlockedPacks.Max(id => Data.Pack(id)?.advance ?? 1));
             }

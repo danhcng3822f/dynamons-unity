@@ -37,17 +37,28 @@ namespace Dynamons
             bool pureMiss = missed && ops.All(Missable);
             var visuals = (pureMiss ? data.battleData.missVisualSteps : move.visualSteps) ?? Array.Empty<VisualStep>();
             var target = backfire ? actor : defender;
-            events.Add(new BattleEvent { Type = "ability", Actor = actor.Id, Target = target.Id, Text = pureMiss ? "MISS" : full ? actor.Passive.boostedTitle : move.title,
-                Visuals = backfire ? visuals.Where(step => step.inHypno != "none").ToArray() : visuals });
-            if (backfire) Emit("hypno", actor, "HYPNO BACKFIRE!");
-            if (missed) Emit("miss", defender, "MISS");
+            events.Add(new BattleEvent
+            {
+                Type = "ability", Actor = actor.Id, Target = target.Id, Side = SideOf(actor), MonId = target.MonId,
+                AbilityId = move.id, FullPower = full, Backfire = backfire, Missed = pureMiss,
+                Text = pureMiss ? "MISS" : full ? actor.Passive.boostedTitle : move.title,
+                Visuals = backfire ? visuals.Where(step => step.inHypno != "none").ToArray() : visuals
+            });
+            if (backfire) Emit("hypno", actor, "HYPNO BACKFIRE!", backfire: true);
+            if (missed) Emit("miss", defender, "MISS", missed: true);
             bool immune = false;
             if (!item && !missed && !backfire && defender.Hp > 0 && defender.Status != "sleep" && ops.Any(Hostile))
             {
-                if (defender.Shield > 0) { defender.Shield--; immune = true; Emit("immune", defender, "SHELL SHIELD SHATTERED!"); }
+                if (defender.Shield > 0)
+                {
+                    defender.Shield--; immune = true;
+                    Emit("immune", defender, "SHELL SHIELD SHATTERED!", variant: "shield", shieldHits: defender.Shield);
+                }
                 else if (defender.Passive?.chance > 0 && rng() < defender.Passive.chance)
                 {
-                    defender.VoidStacks++; immune = true; Emit("immune", defender, "VOID EVADE!");
+                    defender.VoidStacks++; immune = true;
+                    Emit("immune", defender, "VOID EVADE!", variant: "void", stacks: defender.VoidStacks,
+                        bonusPct: GameData.Round(defender.VoidStacks * (defender.Passive?.dmgPerStack ?? 0) * 100));
                 }
             }
             bool targetWasAsleep = target.Status == "sleep";
@@ -84,7 +95,7 @@ namespace Dynamons
                         {
                             target.Rage = false; target.RageTurns = 0; ClearStatus(target); target.Status = op.Substring(6);
                             if (target.Status == "sleep") { target.SleepTurns = 2; target.SleepFresh = backfire || Opponents.Contains(actor); }
-                            Emit("status", target, target.Status.ToUpperInvariant());
+                            Emit("status", target, target.Status.ToUpperInvariant(), status: target.Status);
                         }
                         break;
                     case "incr_atk": case "incr_def": case "incr_aim": case "decr_atk": case "decr_def": case "decr_aim":
@@ -106,9 +117,15 @@ namespace Dynamons
                 {
                     int threshold = Math.Max(1, actor.Passive.threshold);
                     actor.Charges = full ? 0 : Math.Min(threshold, actor.Charges + 1);
-                    Emit("passive", actor, actor.Charges >= threshold ? "SPORE FULL POWER READY!" : null);
+                    bool ready = actor.Charges >= threshold;
+                    Emit("passive", actor, ready ? "SPORE FULL POWER READY!" : null, ready: ready, variant: "charge", charges: actor.Charges, threshold: threshold);
                 }
-                if (actor.Passive?.type == "ramp") { actor.PowerStacks++; Emit("passive", actor); }
+                if (actor.Passive?.type == "ramp")
+                {
+                    actor.PowerStacks++;
+                    Emit("passive", actor, variant: "ramp", stacks: actor.PowerStacks,
+                        bonusPct: GameData.Round(actor.PowerStacks * actor.Passive.dmgPerStack * 100));
+                }
             }
             if (!item && move.cooldown > 0) actor.Cooldowns[move.id] = move.cooldown + 1;
         }
@@ -123,7 +140,7 @@ namespace Dynamons
         private void EnemyTurn()
         {
             var actor = Enemy; var target = Player;
-            if (actor.Status == "sleep") { Emit("sleep", actor, "FAST ASLEEP"); return; }
+            if (actor.Status == "sleep") { Emit("sleep", actor, "FAST ASLEEP", status: "sleep"); return; }
             var cfg = Encounter.Ai;
             if (cfg != null)
             {

@@ -38,13 +38,26 @@ export function normalize(raw) {
       captainAmounts: raw.loot.captainAmounts.map(row => ({ ...row, coins: range(row.coins) })) },
     products: raw.lootShop.products.map(row => ({ ...row, price: row.id === 'chest' && !Number(row.price) ? 150 : Number(row.price),
       loot: row.loot.map(step => ({ amount: Number(step.amount), pool: pool(step.pool) })) })),
+    shopMessage: raw.lootShop.messages?.find(row => row.id === 'from_menu')?.msg ?? "I wonder what you'll get!",
     battleData: { ...raw.battleData, hypnoBackfireChance: odds(raw.battleData.hypnoBackfireChance),
       aiming: raw.battleData.aiming.map(row => ({ upTo: row.upTo, miss: odds(row.miss), crit: odds(row.crit) })) },
     tutorial: { chooseMons: raw.tutorial.chooseMons, startingCoins: Number(raw.tutorial.startingCoins),
       startingItems: raw.tutorial.startingItems.map(text => { const [id, amount] = text.split(','); return reward({ id, amount }); }) },
     dialogs: raw.dialogs,
-    fonts: Object.entries(FONT_MANIFEST).map(([id, font]) => ({ id, capTop: font.capTop, baseline: font.baseline,
-      chars: Object.keys(font.glyphs).map(Number) })),
+    fonts: Object.entries(FONT_MANIFEST).map(([id, font]) => {
+      const rawKern = JSON.parse(readFileSync(new URL(`../../web/assets/hd-images/fonts/${id}/kern.txt`, import.meta.url), 'utf8'));
+      const glyphs = Object.entries(font.glyphs).map(([code, g]) => ({
+        code: Number(code), w: g[0], h: g[1], top: g[3] ?? -1, bottom: g[5] ?? -1,
+      }));
+      const kerns = [];
+      for (const [leftKey, row] of Object.entries(rawKern)) {
+        const left = leftKey === 'any' ? 0 : leftKey.codePointAt(0);
+        for (const [rightKey, adjust] of Object.entries(row)) {
+          kerns.push({ left, right: rightKey === 'any' ? 0 : rightKey.codePointAt(0), adjust });
+        }
+      }
+      return { id, capTop: font.capTop, baseline: font.baseline, chars: glyphs.map(g => g.code), glyphs, kerns };
+    }),
   };
 }
 
@@ -121,12 +134,63 @@ export function runtimeAssets(data) {
     ...[...new Set(data.mapNodes.map(node => node.bg).filter(Boolean).concat('arena'))].map(bg => `Art/session/bgs/${bg}.jpg`),
     ...data.tutorial.chooseMons.map(row => `Art/onboarding/choose_panel_${row.type}.png`),
     'Art/splash/splash.jpg', 'Art/splash/logo.png', 'Art/splash/btn_play.png', 'Art/onboarding/btn_choose.png',
+    'Art/onboarding/btn_yes.png', 'Art/onboarding/choose_panel_earth.png', 'Art/onboarding/choose_panel_fire.png',
+    'Art/onboarding/choose_panel_water.png', 'Art/onboarding/choose_title.png', 'Art/onboarding/hand.png',
     ...[...new Set(['stephan', ...data.mapPacks.flatMap(row => row.captains?.avail ?? []),
       ...data.mapNodes.flatMap(node => [node.bossBattle?.enemy, node.trainingBattle?.enemy]).filter(Boolean)])].map(id => `Art/general/enemies/${id}_icon.png`),
+    ...['chuk', 'jenni', 'klyde', 'kolin', 'manifesto', 'nora', 'patrik', 'remi', 'shelldon', 'sofia', 'sumsum', 'training', 'zak'].map(id => `Art/general/enemies/${id}_avatar.png`),
     ...data.dialogs.flatMap(row => row.content.filter(line => line.who?.includes(':')).map(line => `Art/general/dialog/${line.who.split(':')[1]}.png`)),
+    'Art/general/dialog/speech_bubble.png', 'Art/general/dialog/jovani-hand.png',
+    'Art/general/hud_bg.png', 'Art/general/hud_coins.png', 'Art/general/badge_levelup.png', 'Art/general/badge_red.png',
+    'Art/general/btn_arrow_right.png', 'Art/general/btn_cancel.png', 'Art/general/btn_close.png', 'Art/general/btn_cool.png',
+    'Art/general/btn_levelup.png', 'Art/general/btn_levelup_text.png', 'Art/general/btn_sound_off.png', 'Art/general/btn_sound_on.png',
+    'Art/general/icon_aim.png', 'Art/general/icon_atk.png', 'Art/general/icon_def.png', 'Art/general/levelup_blast.png',
+    'Art/general/pedestal.png', 'Art/general/reward_slot.png', 'Art/general/statsbar_bg.png', 'Art/general/statsbar_fill.png',
+    'Art/general/statsbar_fill_red.png', 'Art/general/statsbar_fill_white.png', 'Art/general/xpbar_bg.png', 'Art/general/xpbar_fill.png',
+    ...['dark', 'earth', 'electric', 'fire', 'water'].flatMap(t => [
+      `Art/general/huds/pane_big_${t}.png`, `Art/general/huds/pane_mini_${t}.png`,
+      `Art/general/huds/pane_thumb_${t}.png`, `Art/general/huds/pane_tooltip_${t}.png`,
+    ]),
+    'Art/general/huds/hpbar_big_bg.png', 'Art/general/huds/hpbar_big_fill.png', 'Art/general/huds/hpbar_big_fill_red.png',
+    'Art/general/huds/hpbar_big_fill_white.png', 'Art/general/huds/hpbar_med_bg.png', 'Art/general/huds/hpbar_med_fill.png',
+    'Art/general/huds/hpbar_small_bg.png', 'Art/general/huds/hpbar_small_fill.png', 'Art/general/huds/tip_strong.png', 'Art/general/huds/tip_weak.png',
+    ...['blast', 'blast_water', 'boulder_earth', 'boulder_fire', 'bubble', 'can_open', 'enflame', 'fire_spin', 'freeze_gas',
+      'heatwave', 'hypno_fx', 'ice_shield', 'poison_gas', 'rage_fx_back', 'rage_fx_front', 'rainbow', 'rain_fire', 'rain_ice',
+      'rain_leaf', 'rain_pods', 'rock_shield', 'sick_fx', 'slash', 'smoke', 'splash', 'splash_fire', 'spores_cloud', 'spray',
+      'tentacle_back', 'tentacle_top', 'vine_back', 'vine_top', 'wave', 'winter'].map(id => `Art/session/abilities/fx/${id}.png`),
+    'Art/session/mon_shadow.png', 'Art/session/ui/btn_back.png', 'Art/session/ui/btn_catch.png', 'Art/session/ui/btn_catch_off.png',
+    'Art/session/ui/btn_escape.png', 'Art/session/ui/btn_mega.png', 'Art/session/ui/btn_more.png', 'Art/session/ui/catch_disk.png',
+    'Art/session/ui/discatch_glow.png', 'Art/session/ui/disk_icon.png', 'Art/session/ui/icon_hypno.png', 'Art/session/ui/icon_off.png',
+    'Art/session/ui/icon_rage.png', 'Art/session/ui/icon_sick.png', 'Art/session/ui/icon_sleep.png', 'Art/session/ui/report_backfire.png',
+    'Art/session/ui/report_critical.png', 'Art/session/ui/report_rage.png', 'Art/session/ui/report_sick.png', 'Art/session/ui/report_strong.png',
+    'Art/session/ui/report_weak.png', 'Art/session/ui/turn.png', 'Art/session/endscreen/btn_later.png', 'Art/session/endscreen/rewards_modal.png',
+    'Art/session/endscreen/superlative1.png', 'Art/session/endscreen/superlative2.png', 'Art/session/endscreen/superlative3.png',
+    'Art/session/endscreen/superlative4.png', 'Art/session/endscreen/you_win.png',
     ...data.products.map(row => `Art/iap-shop/products/product_${row.id === 'chest' ? 'coolchest' : row.id}.png`),
-    'Art/map/node.png', 'Art/map/avatar.png', 'Art/map/marker_battle.png', 'Art/map/marker_arena.png', 'Art/map/path_dot.png', 'Art/items/icons/coins.png',
+    'Art/shop/bg_shop.png', 'Art/shop/btn_buy.png', 'Art/shop/btn_buy_off.png', 'Art/shop/btn_watch.png', 'Art/shop/btn_watch_off.png',
+    'Art/shop/divider_contains.png', 'Art/shop/divider_maycontain.png', 'Art/shop/label_free.png', 'Art/shop/label_outofstock.png',
+    'Art/shop/loot_explosion.png', 'Art/shop/loot_lights.png', 'Art/shop/product_select.png', 'Art/shop/product_slot.png',
+    'Art/shop/products/product_bag.png', 'Art/shop/products/product_chest.png',
+    'Art/team/bg_team.jpg', 'Art/team/bg_team_slots.png', 'Art/team/btn_back_all.png', 'Art/team/btn_back_map.png',
+    'Art/team/btn_confirm_release.png', 'Art/team/btn_heal_small_kit.png', 'Art/team/btn_heal_small_nokit.png', 'Art/team/hud_mons.png',
+    'Art/team/team_slot.png', 'Art/team/info/btn_heal_kit.png', 'Art/team/info/btn_heal_nokit.png', 'Art/team/info/btn_release.png',
+    'Art/team/info/modal_release.png', 'Art/team/info/skill_description.png', 'Art/team/info/skill_lock_overlay.png', 'Art/team/info/skill_select.png',
+    'Art/map/node.png', 'Art/map/node_arena.png', 'Art/map/avatar.png', 'Art/map/marker_battle.png', 'Art/map/marker_arena.png',
+    'Art/map/marker_off.png', 'Art/map/marker_research.png', 'Art/map/path_dot.png', 'Art/map/msg_heal.png',
+    'Art/map/btn_items.png', 'Art/map/btn_like.png', 'Art/map/btn_shop.png', 'Art/map/btn_team.png',
+    'Art/map/bgs/bg1.jpg', 'Art/map/bgs/bg2.jpg', 'Art/map/bgs/bg3.jpg', 'Art/map/bgs/bg4.jpg',
+    'Art/map/modals/enemy/bg_arena.png', 'Art/map/modals/enemy/bg_boss.png', 'Art/map/modals/enemy/bg_captain.png', 'Art/map/modals/enemy/btn_fight.png',
+    'Art/items/icons/coins.png', 'Art/items/icons/levelup_unknown.png', 'Art/items/icons/more_items.png', 'Art/items/icons/starter_ticket.png',
     'musics/music_map_loop.ogg', 'musics/music_battle_loop.ogg', 'musics/music_arena_loop.ogg',
+    ...['attack_blizzard', 'attack_boulder_pile', 'attack_bubble_burst', 'attack_confuse', 'attack_enflame', 'attack_enrage',
+      'attack_fire_storm', 'attack_flame_swirl', 'attack_flash', 'attack_furnace', 'attack_hellfire', 'attack_iceberg',
+      'attack_jungle_whip', 'attack_leaf_strike', 'attack_miss', 'attack_rainbow_beam', 'attack_revive', 'attack_rock_shield',
+      'attack_scratch', 'attack_smoke_screen', 'attack_sonic_shock', 'attack_spark', 'attack_spore_shot', 'attack_thunder_storm',
+      'attack_vine_squeeze', 'attack_volcano', 'attack_water_blast', 'attack_winter_chills', 'button_click', 'canned_powerup',
+      'catch_failure', 'catch_success', 'chest_opening', 'cool_button', 'critical_hit', 'eating_powerup', 'faint', 'hypno',
+      'level_up_animation', 'level_up_indicator', 'loot_bag_opening', 'music_arena_start', 'music_battle_boss_start',
+      'music_battle_start', 'purchase', 'screen_close', 'screen_open', 'sick', 'spray_powerup', 'stat_lowered', 'stat_raised',
+      'use_healing_kit', 'win_battle'].map(id => `sounds/${id}.ogg`),
   ])];
 }
 

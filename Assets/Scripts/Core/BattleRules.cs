@@ -34,7 +34,9 @@ namespace Dynamons
     public sealed class BattleEvent
     {
         public string Type, Target, Text, Stat, Actor;
-        public int Amount, Hp = -1;
+        public string AbilityId, Side, MonId, Variant, Status;
+        public bool FullPower, Backfire, Missed, Success, Ready;
+        public int Amount, Hp = -1, ShieldHits, Stacks, BonusPct, Charges, Threshold;
         public VisualStep[] Visuals;
     }
 
@@ -96,8 +98,19 @@ namespace Dynamons
             return GameData.Clamp(GameData.Round(raw * .55), 6, GameData.Round(cap * (crit && !item ? 1.35 : actor.Mega ? 1.2 : 1)));
         }
 
-        private void Emit(string type, Combatant target = null, string text = null, int amount = 0, bool hp = false, string stat = null) =>
-            events.Add(new BattleEvent { Type = type, Target = target?.Id, Text = text, Amount = amount, Hp = hp ? target.Hp : -1, Stat = stat });
+        private string SideOf(Combatant mon) => mon == null ? null : Party.Contains(mon) ? "player" : "enemy";
+
+        private void Emit(string type, Combatant target = null, string text = null, int amount = 0, bool hp = false, string stat = null,
+            string abilityId = null, bool fullPower = false, bool backfire = false, bool missed = false, bool success = false, bool ready = false,
+            string variant = null, string status = null, int shieldHits = 0, int stacks = 0, int bonusPct = 0, int charges = 0, int threshold = 0) =>
+            events.Add(new BattleEvent
+            {
+                Type = type, Target = target?.Id, Side = SideOf(target), MonId = target?.MonId,
+                Text = text, Amount = amount, Hp = hp ? target.Hp : -1, Stat = stat,
+                AbilityId = abilityId, FullPower = fullPower, Backfire = backfire, Missed = missed,
+                Success = success, Ready = ready, Variant = variant, Status = status,
+                ShieldHits = shieldHits, Stacks = stacks, BonusPct = bonusPct, Charges = charges, Threshold = threshold
+            });
 
         public BattleEvent[] Apply(BattleAction action, SaveData inventory = null)
         {
@@ -136,10 +149,10 @@ namespace Dynamons
             if (action.Type == "catch")
             {
                 bool success = rng() < CatchOdds(target);
-                Emit("catch", target, success ? "CAUGHT!" : "BROKE FREE!");
+                Emit("catch", target, success ? "CAUGHT!" : "BROKE FREE!", success: success);
                 if (success) { Caught = target; Award(target); Finish("player"); return events.ToArray(); }
             }
-            else if (action.Type == "ability" && actor.Status == "sleep") Emit("sleep", actor, "FAST ASLEEP");
+            else if (action.Type == "ability" && actor.Status == "sleep") Emit("sleep", actor, "FAST ASLEEP", status: "sleep");
             else Resolve(actor, target, move);
 
             if (CheckEnd()) return events.ToArray();
