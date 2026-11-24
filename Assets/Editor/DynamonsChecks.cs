@@ -595,6 +595,64 @@ namespace Dynamons
                   oneHitKoRules.Phase == "ended" && oneHitKoRules.Outcome == "host" && oneHitKoRules.ResolvedTurns == 1,
                 "1v1 Turn-1 KO ends match with Outcome==host and ResolvedTurns==1");
 
+            // Static / non-blocking LAN transport & codec sanity checks
+            var beaconJson = JsonUtility.ToJson(new LanBeaconDto
+            {
+                protocolVersion = LanConst.ProtocolVersion,
+                roomId = "room-1",
+                hostName = "HOST",
+                ruleMode = "fair20",
+                itemsAllowed = true,
+                tcpPort = LanConst.BattlePortBase,
+                teamCount = 3
+            });
+            var decodedBeacon = LanCodec.Decode<LanBeaconDto>(beaconJson);
+            Check(decodedBeacon != null && decodedBeacon.protocolVersion == LanConst.ProtocolVersion &&
+                  decodedBeacon.roomId == "room-1" && decodedBeacon.hostName == "HOST" &&
+                  decodedBeacon.ruleMode == "fair20" && decodedBeacon.itemsAllowed &&
+                  decodedBeacon.tcpPort == LanConst.BattlePortBase && decodedBeacon.teamCount == 3,
+                "LanBeaconDto round-trips cleanly via JsonUtility/LanCodec");
+
+            string pingWire = LanCodec.Encode("ping", new LanPingDto { ts = 424242L });
+            var pingEnv = LanCodec.Decode<LanWireEnvelope>(pingWire);
+            var pingPayload = pingEnv != null ? LanCodec.Decode<LanPingDto>(pingEnv.payload) : null;
+            Check(pingEnv != null && pingEnv.type == "ping" && pingPayload != null && pingPayload.ts == 424242L,
+                "LanPingDto envelope round-trips cleanly");
+
+            var localIps = LanTransport.LocalIpv4Addresses();
+            Check(localIps != null &&
+                  localIps.All(ip => !string.IsNullOrEmpty(ip) && ip != "127.0.0.1" && !ip.StartsWith("169.254.", StringComparison.Ordinal)),
+                "LanTransport.LocalIpv4Addresses filters loopback and link-local addresses");
+
+            var dummyRoom = new LanDiscoveredRoom
+            {
+                Key = "192.168.1.2:41976",
+                HostIp = "192.168.1.2",
+                TcpPort = LanConst.BattlePortBase,
+                HostName = "HOST",
+                RuleMode = "fair20",
+                ItemsAllowed = false,
+                TeamCount = 2,
+                LastSeenUtc = DateTime.UtcNow
+            };
+            var dummyNetMsg = new LanNetMessage { Type = "connected", JsonPayload = "{}", Reason = string.Empty };
+            Check(dummyRoom.Key == "192.168.1.2:41976" && dummyNetMsg.Type == "connected",
+                "LanDiscoveredRoom and LanNetMessage surface expected fields");
+
+            using (var idleTransport = new LanTransport())
+            {
+                Check(!idleTransport.IsHost && !idleTransport.IsConnected && idleTransport.BoundPort == 0,
+                    "Fresh LanTransport starts disconnected with BoundPort 0");
+                var initialRooms = idleTransport.GetRooms();
+                var initialMsgs = idleTransport.DrainMainThreadMessages(0f);
+                Check(initialRooms != null && initialRooms.Count == 0 && initialMsgs != null && initialMsgs.Count == 0,
+                    "Idle LanTransport GetRooms and DrainMainThreadMessages return empty non-null lists");
+                idleTransport.Send("ping", new LanPingDto { ts = 1L });
+                idleTransport.UpdateBeacon(decodedBeacon);
+                idleTransport.Stop();
+                idleTransport.Stop();
+            }
+
             Debug.Log("Dynamons rules & parity checks passed.");
         }
     }
