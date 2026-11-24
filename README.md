@@ -15,6 +15,6 @@ In the private Unity repository, configure the license credentials as [GitHub Ac
 
 Save data is in Unity's `Application.persistentDataPath`, not in the browser. Recovery uses the previous valid snapshot, so a damaged primary file can roll back the latest play. Like the Web version, closing during combat abandons the current battle but does not refund tickets or consumables already saved. The port does not import browser progress or award the Web 100-ticket test gift.
 
-Presentation is not pixel-identical to the Web version: battle sprites currently use native movement and feedback, not every original particle effect or exact timeline. The PC window and mouse/touch flows still need Play Mode verification.
+Presentation closely mirrors the Web version (`320x568` portrait UI artwork, all 7 bitmap fonts with kerning, GPU vector FX, 34 FX spritesheets, drag-and-drop Team sorting, Shop burst reveal, and Result showcase). No auto-gifted bonus starters are granted; players choose LV 2 starters and catch Dynamons normally. Unity 6 LTS C# compilation, `Dynamons -> Verify Rules`, mouse/touch drag-and-drop, VectorCanvas visuals, and audio playback still await Play Mode verification in the Unity Editor.
 
 See [port progress](PORT_PROGRESS.md) for the exact verification status.

@@ -107,7 +107,68 @@ namespace Dynamons
                 Check(SaveStore.Load(path, data).Event.RewardPending, "Failed write cannot destroy the last-good backup");
             }
             finally { System.IO.Directory.Delete(System.IO.Path.GetDirectoryName(path), true); }
-            Debug.Log("Dynamons rules checks passed.");
+
+            // Parity checks for visual/HUD/FX schema, wild pool filtering, pack unlocks & rich BattleEvents
+            Check(data.fonts.Length == 7, "All 7 bitmap fonts exported");
+            foreach (var font in data.fonts)
+            {
+                Check(font.glyphs != null && font.glyphs.Length > 0, "Font glyphs exported: " + font.id);
+                Check(font.kerns != null && font.kerns.Length > 0, "Font kerns exported: " + font.id);
+            }
+            var bigFont = data.Font("white_stroked_big");
+            Check(bigFont != null && bigFont.kerns.Any(k => k.left == 48 && k.right == 50 && Math.Abs(k.adjust - (-3.5f)) < 0.01f),
+                "Fractional bitmap font kerning preserved on white_stroked_big");
+            Check(data.shopMessage == "I wonder what you'll get!", "Shop message imported");
+            Check(data.products.Length == 2 && data.products[1].lootTitle == "contains" && data.products[1].displayRewards?.Length == 4,
+                "Shop product metadata imported");
+
+            var wildWorld = new WorldRules(data, () => .99);
+            var wild22 = wildWorld.Wild(data.Node(22), 4);
+            Check(wild22.Members.Length == 1 && wild22.Members[0].MonId == "kobalt",
+                "Wild encounter includes node.alsoAvailMons with onlyFor == wild");
+            var cap22 = wildWorld.Captain(data.Node(22), 4);
+            Check(cap22.Members.Length > 0 && cap22.Members.All(m => m.MonId != "kobalt"),
+                "Captain encounter excludes wild-only pool entries");
+
+            var unlockFlow = new GameFlow(data, SaveData.Create(data, fixtureDay), () => .5);
+            var unlockBattle = new BattleRules(data, new Encounter { Kind = "boss", Node = new MapNode { id = 999, pack = "b", unlocksPack = "c" },
+                Members = new[] { new MemberSpec { MonId = "leafrog", Level = 1 } } }, new[] { OwnedMon.New("krimson", 20, 100) }, () => .5);
+            unlockBattle.Enemy.Hp = 1;
+            unlockBattle.Apply(new BattleAction("ability", "hellfire"));
+            unlockFlow.CommitBattle(unlockBattle, fixtureDay);
+            Check(unlockFlow.Save.UnlockedPacks.Contains("b") && unlockFlow.Save.UnlockedPacks.Contains("c"),
+                "CommitBattle records both node.pack and node.unlocksPack");
+
+            var shieldFoe = new Encounter { Kind = "wild", CanCapture = true, Members = new[] { new MemberSpec { MonId = "squirtle", Level = 14 } } };
+            var evBattle = new BattleRules(data, shieldFoe, new[] { OwnedMon.New("krimson", 20, 100) }, () => .5);
+            var shieldEvs = evBattle.Apply(new BattleAction("ability", "hellfire"));
+            var abilityEv = shieldEvs.FirstOrDefault(e => e.Type == "ability");
+            var immuneEv = shieldEvs.FirstOrDefault(e => e.Type == "immune");
+            Check(abilityEv != null && abilityEv.AbilityId == "hellfire" && abilityEv.Side == "player", "Ability event structured metadata");
+            Check(immuneEv != null && immuneEv.Variant == "shield" && immuneEv.ShieldHits == 0, "Shield immune event structured metadata");
+
+            var voidFoe = new Encounter { Kind = "wild", CanCapture = true, Members = new[] { new MemberSpec { MonId = "nyxalon", Level = 20 } } };
+            var voidBattle = new BattleRules(data, voidFoe, new[] { OwnedMon.New("krimson", 20, 100) }, () => .01);
+            var voidEvs = voidBattle.Apply(new BattleAction("ability", "hellfire"));
+            var voidEv = voidEvs.FirstOrDefault(e => e.Type == "immune");
+            Check(voidEv != null && voidEv.Variant == "void" && voidEv.Stacks == 1 && voidEv.BonusPct > 0, "Void immune event structured metadata");
+
+            var catchBattle = new BattleRules(data, shieldFoe, new[] { OwnedMon.New("krimson", 20, 100) }, () => 0.0);
+            catchBattle.Enemy.Hp = 1;
+            var catchBag = new SaveData(); catchBag.Add("discatch", 1);
+            var catchEvs = catchBattle.Apply(new BattleAction("catch"), catchBag);
+            Check(catchEvs.Any(e => e.Type == "catch" && e.Success), "Catch event Success flag populated");
+
+            foreach (var texPath in new[]
+            {
+                "Dynamons/Art/general/huds/pane_big_fire", "Dynamons/Art/session/abilities/fx/blast",
+                "Dynamons/Art/fonts/white_stroked_big/c65", "Dynamons/Art/shop/products/product_chest"
+            })
+            {
+                Check(Resources.Load<Texture2D>(texPath) != null, "Required texture asset loads: " + texPath);
+            }
+
+            Debug.Log("Dynamons rules & parity checks passed.");
         }
     }
 }
