@@ -27,6 +27,7 @@ jobs:
           UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
         with:
           targetPlatform: Android
+          cliVersion: v0.1.77
           buildName: Dynamons2
           buildsPath: build
           versioning: None

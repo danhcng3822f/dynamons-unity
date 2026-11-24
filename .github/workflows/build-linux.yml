@@ -25,6 +25,7 @@ jobs:
           UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
         with:
           targetPlatform: StandaloneLinux64
+          cliVersion: v0.1.77
           buildName: Dynamons2
           buildsPath: build
           versioning: None
