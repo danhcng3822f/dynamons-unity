@@ -39,6 +39,7 @@ namespace Dynamons
         private List<CombatantView> viewEnemy = new List<CombatantView>();
         private int viewActivePlayer, viewActiveEnemy;
         private readonly Dictionary<string, float> hpTrail = new Dictionary<string, float>();
+        private readonly Dictionary<string, int> battleXpEarned = new Dictionary<string, int>();
         private readonly List<FeedbackEntry> feedbacks = new List<FeedbackEntry>();
 
         private BattleEvent[] battleEvents = Array.Empty<BattleEvent>();
@@ -101,6 +102,7 @@ namespace Dynamons
             battleLog = string.Empty;
             battleLogTimer = 0f;
             hpTrail.Clear();
+            battleXpEarned.Clear();
             SnapshotBattleView();
 
             string intro = encounter.Kind == "boss" ? "music_battle_boss_start" : encounter.Kind == "arena" ? "music_arena_start" : "music_battle_start";
@@ -173,7 +175,7 @@ namespace Dynamons
                         if (battle.Outcome != null)
                         {
                             battleActive = false;
-                            Result(pendingBattleLoot, pendingBattleSaved);
+                            ShowResult(pendingBattleLoot, pendingBattleSaved);
                             return;
                         }
                         if (battle.NeedsSwitch) { battleForcedSwap = true; battleMoreOpen = true; }
@@ -318,6 +320,10 @@ namespace Dynamons
             if (battleWaiting || battle == null || battle.Outcome != null) return;
             var steps = battle.Apply(action, save);
             if (steps.Length == 0) return;
+
+            foreach (var ev in steps)
+                if (ev.Type == "xp" && !string.IsNullOrEmpty(ev.Target))
+                    battleXpEarned[ev.Target] = (battleXpEarned.TryGetValue(ev.Target, out int cur) ? cur : 0) + ev.Amount;
 
             battleMoreOpen = false;
             battleForcedSwap = false;
@@ -754,14 +760,13 @@ namespace Dynamons
             var outList = new List<(string, int, OwnedMon)>();
             if (string.IsNullOrEmpty(itemId) || !itemId.StartsWith("levelup_", StringComparison.Ordinal)) return outList;
             string reqKind = itemId == "levelup_joker" ? null : itemId.Substring(8);
-            int maxHp = data.battleData.maxHP;
             for (int i = 0; i < save.Team.Count; i++)
             {
                 var mon = save.Team[i];
                 var info = data.Mon(mon.MonId);
-                if (info == null || mon.Level >= data.MaxLevel) continue;
-                int needXp = data.Stats(mon.MonId, mon.Level).xp;
-                if (mon.Xp >= needXp && (reqKind == null || info.kind == reqKind))
+                if (info == null) continue;
+                int needXp = flow.NeededXp(mon);
+                if (needXp > 0 && mon.Xp >= needXp && (reqKind == null || info.kind == reqKind))
                     outList.Add((itemId, i, mon));
             }
             return outList;
@@ -934,39 +939,6 @@ namespace Dynamons
                 fonts.Draw(host, "black_small", "YOUR BAG IS EMPTY", GameUi.Width * 0.5f, bgY + 95f, 11f, "center");
                 fonts.Draw(host, "white_small", "Find items in battles and loot bags.", GameUi.Width * 0.5f, bgY + 224f, 9f, "center");
             }
-        }
-
-        private void Result(Reward[] loot, bool saved)
-        {
-            string outcome = battle.Outcome;
-            string after = outcome == "player" ? battle.Encounter.Dialogs?.dialog_win : outcome == "enemy" ? battle.Encounter.Dialogs?.dialog_lose : null;
-            BeginPage("session/bgs/water"); Track("music_map_loop");
-            GameUi.Fill(page, new Color(0, 0, 0, .63f), 0, 0, 320, 568);
-            Header(outcome == "player" ? "YOU WIN" : outcome == "enemy" ? "DEFEAT" : "ESCAPED");
-            if (battle.Caught != null)
-            {
-                ui.Art(page, GameUi.Mon(battle.Caught.MonId, "front"), 91, 80, 138, 140, true);
-                fonts.Draw(page, "white_stroked_big", "CAUGHT " + data.Mon(battle.Caught.MonId).title.ToUpperInvariant(), 160f, 221f, 16f, "center", null, 300f);
-            }
-            else
-            {
-                ui.Art(page, GameUi.Mon(battle.Player.MonId, "front"), 91, 74, 138, 142, true);
-                fonts.Draw(page, "white_stroked_small", $"{data.Mon(battle.Player.MonId).title.ToUpperInvariant()}   XP  {battle.Player.Xp}", 160f, 220f, 13f, "center");
-            }
-            for (int i = 0; i < loot.Length; i++)
-            {
-                var reward = loot[i]; int x = 10 + i % 5 * 61, y = 264 + i / 5 * 67;
-                ui.Art(page, GameUi.Item(reward.id), x + 7, y, 46, 40, true);
-                fonts.Draw(page, "white_stroked_small", "x" + reward.amount, x + 30f, y + 39f, 11f, "center");
-            }
-            if (save.Event.RewardPending) fonts.Draw(page, "white_stroked_small", "CHOOSE A LV 10 STARTER", 160f, 363f, 13f, "center");
-            if (!saved) fonts.Draw(page, "white_stroked_small", "SAVE FAILED - CONTINUE TO RETRY", 160f, 434f, 10f, "center");
-            ui.ArtButton(page, "general/btn_cool", 100f, 498f, 120f, 45f, () =>
-            {
-                if (!saved && !Persist()) { Note("Could not save. Please retry."); return; }
-                battle = null;
-                Dialogue(after, () => { if (outcome == "enemy") ShowTeam(); else ShowMap(); });
-            });
         }
     }
 }
