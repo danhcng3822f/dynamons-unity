@@ -228,6 +228,47 @@ namespace Dynamons
             Check(!PlayerSettings.SplashScreen.show, "Unity SplashScreen must be disabled");
             Check(PlayerSettings.Android.targetArchitectures == AndroidArchitecture.ARM64, "Android target must be ARM64");
 
+            // LAN protocol DTO & perspective codec checks
+            string encodedCmd = LanCodec.Encode("action", new LanActionCmdDto { seq = 3, actionType = "ability", id = "hellfire" });
+            var envelope = LanCodec.Decode<LanWireEnvelope>(encodedCmd);
+            Check(envelope != null && envelope.type == "action", "LanWireEnvelope type round-trip");
+            var decodedCmd = LanCodec.Decode<LanActionCmdDto>(envelope.payload);
+            Check(decodedCmd != null && decodedCmd.seq == 3 && decodedCmd.actionType == "ability" && decodedCmd.id == "hellfire",
+                "LanActionCmdDto payload round-trip");
+            Check(LanCodec.Decode<LanWireEnvelope>(null) == null && LanCodec.Decode<LanWireEnvelope>("") == null &&
+                  LanCodec.Decode<LanWireEnvelope>("{bad-json") == null,
+                "LanCodec.Decode returns default on empty or malformed JSON");
+
+            Check(LanCodec.ToLocalSide("host", "host") == "player" &&
+                  LanCodec.ToLocalSide("host", "client") == "enemy" &&
+                  LanCodec.ToLocalSide("client", "client") == "player" &&
+                  LanCodec.ToLocalSide("client", "host") == "enemy" &&
+                  LanCodec.ToLocalSide("other", "host") == "other",
+                "LanCodec.ToLocalSide maps host/client sides to viewer perspective");
+
+            var sampleVisuals = new[] { new VisualStep { action = "fx-fire", inHypno = "both", at = 120, duration = 450 } };
+            var sampleEvent = new BattleEvent
+            {
+                Type = "ability", Target = "enemy-0", Text = "HELLFIRE", Stat = "atk", Actor = "host-0",
+                AbilityId = "hellfire", Side = "player", MonId = "krimson", Variant = "charge", Status = "sick",
+                FullPower = true, Backfire = false, Missed = false, Success = true, Ready = true,
+                Amount = 25, Hp = 75, ShieldHits = 1, Stacks = 2, BonusPct = 20, Charges = 3, Threshold = 3,
+                Visuals = sampleVisuals
+            };
+            var eventDto = LanCodec.EventToDto(sampleEvent, "host");
+            var hostEvent = LanCodec.EventFromDto(eventDto, "host");
+            var clientEvent = LanCodec.EventFromDto(eventDto, "client");
+            Check(eventDto != null && eventDto.side == "host" &&
+                  hostEvent.Side == "player" && clientEvent.Side == "enemy" &&
+                  clientEvent.Type == "ability" && clientEvent.Target == "enemy-0" && clientEvent.Text == "HELLFIRE" &&
+                  clientEvent.Stat == "atk" && clientEvent.Actor == "host-0" && clientEvent.AbilityId == "hellfire" &&
+                  clientEvent.MonId == "krimson" && clientEvent.Variant == "charge" && clientEvent.Status == "sick" &&
+                  clientEvent.FullPower && !clientEvent.Backfire && !clientEvent.Missed && clientEvent.Success && clientEvent.Ready &&
+                  clientEvent.Amount == 25 && clientEvent.Hp == 75 && clientEvent.ShieldHits == 1 &&
+                  clientEvent.Stacks == 2 && clientEvent.BonusPct == 20 && clientEvent.Charges == 3 && clientEvent.Threshold == 3 &&
+                  clientEvent.Visuals != null && clientEvent.Visuals.Length == 1 && clientEvent.Visuals[0].action == "fx-fire",
+                "LanCodec EventToDto/EventFromDto preserves all BattleEvent fields and flips perspective");
+
             Debug.Log("Dynamons rules & parity checks passed.");
         }
     }

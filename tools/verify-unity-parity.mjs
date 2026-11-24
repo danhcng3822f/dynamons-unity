@@ -259,7 +259,11 @@ function checkFontDesignRulesAndDtoConstraints() {
   assert.ok(!releaseWf.includes('TAG="latest"'), 'build-release.yml must not overwrite a single mutable latest tag');
   assert.ok(releaseWf.includes('DynamonsNext-android-arm64.apk') && releaseWf.includes('DynamonsNext-linux-x64.tar.gz'), 'build-release.yml must publish both Android APK and Linux tarball');
 
-  for (const dtoFile of [join(assetsDir, 'Scripts', 'Core', 'GameData.cs'), join(assetsDir, 'Scripts', 'Core', 'SaveData.cs')]) {
+  for (const dtoFile of [
+    join(assetsDir, 'Scripts', 'Core', 'GameData.cs'),
+    join(assetsDir, 'Scripts', 'Core', 'SaveData.cs'),
+    join(assetsDir, 'Scripts', 'Core', 'LanProtocol.cs'),
+  ]) {
     const txt = readFileSync(dtoFile, 'utf8');
     const rel = relative(unityDir, dtoFile);
     assert.ok(!/Dictionary</.test(txt), `${rel}: JsonUtility [Serializable] DTOs must not use Dictionary fields`);
