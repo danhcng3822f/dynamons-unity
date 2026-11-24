@@ -54,6 +54,7 @@ namespace Dynamons
             if (dialogTapHint != null)
                 dialogTapHint.alpha = 0.65f + 0.35f * Mathf.Sin(Time.unscaledTime * 6f);
             UpdateMapAnimations();
+            UpdateBattleLoop();
             if (flow == null) return;
             var day = DateTime.Today;
             if (day == checkedDay) return;
@@ -82,6 +83,7 @@ namespace Dynamons
             splashLogo = null;
             dialogTapHint = null;
             ResetMapVisualRefs();
+            ResetBattleState();
             starterModalDynamic = null;
             GameUi.Clear(ui.Frame);
             overlay = null;
