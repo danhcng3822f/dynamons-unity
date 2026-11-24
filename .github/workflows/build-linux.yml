@@ -18,7 +18,8 @@ jobs:
       - name: Build Unity player
         uses: game-ci/unity-builder@eb1b9fba120c6e62c9fb7a7a81d6c107ce004c45 # v6.0.0
         env:
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          # Omit UNITY_LICENSE so Unity 6 uses entitlement-based personal activation
+          # rather than Hub .ulf file activation (which fails with Code 400 TimeStamp validation failed).
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
           UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
