@@ -19,6 +19,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Compute build metadata
+        id: meta
+        run: |
+          echo "version_name=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
       - name: Build Unity player (Linux x64)
         uses: game-ci/unity-builder@eb1b9fba120c6e62c9fb7a7a81d6c107ce004c45 # v6.0.0
         env:
@@ -32,7 +37,8 @@ jobs:
           cliVersion: v0.1.77
           buildName: DynamonsNext
           buildsPath: build
-          versioning: None
+          versioning: Custom
+          version: ${{ steps.meta.outputs.version_name }}
 
       - name: Verify and package Linux x64 player
         run: |
@@ -59,6 +65,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Compute build metadata and verify signing secrets
+        id: meta
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KA_NAME: ${{ secrets.ANDROID_KEYALIAS_NAME }}
+          KA_PASS: ${{ secrets.ANDROID_KEYALIAS_PASS }}
+        run: |
+          for v in KS_B64 KS_PASS KA_NAME KA_PASS; do
+            test -n "${!v}" || { echo "Missing required GitHub secret for $v"; exit 1; }
+          done
+          echo "version_name=1.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "version_code=$((100 + GITHUB_RUN_NUMBER))" >> "$GITHUB_OUTPUT"
+
       - name: Build Android APK (IL2CPP arm64-v8a)
         uses: game-ci/unity-builder@eb1b9fba120c6e62c9fb7a7a81d6c107ce004c45 # v6.0.0
         env:
@@ -70,19 +90,117 @@ jobs:
           cliVersion: v0.1.77
           buildName: DynamonsNext
           buildsPath: build
-          versioning: None
+          versioning: Custom
+          version: ${{ steps.meta.outputs.version_name }}
+          androidVersionCode: ${{ steps.meta.outputs.version_code }}
           androidExportType: androidPackage
           androidSymbolType: none
+          androidKeystoreName: DynamonsNext.keystore
+          androidKeystoreBase64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          androidKeystorePass: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          androidKeyaliasName: ${{ secrets.ANDROID_KEYALIAS_NAME }}
+          androidKeyaliasPass: ${{ secrets.ANDROID_KEYALIAS_PASS }}
 
-      - name: Verify Android APK (arm64-v8a & branding)
+      - name: Remove temporary decoded keystore
+        if: always()
+        run: rm -f DynamonsNext.keystore
+
+      - name: Verify Android APK (arm64-v8a, branding, version & signing)
+        env:
+          EXPECTED_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          EXPECTED_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          EXPECTED_CERT_SHA256: d20a448a905a852203030f813bdb006f6b6fd254c4ca14c3da6751372eb4539f
         run: |
           test -f build/Android/DynamonsNext.apk
           unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/arm64-v8a/libil2cpp.so'
           ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/armeabi-v7a/'
           ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/x86'
           python3 - <<'PY'
-          import zipfile
-          with zipfile.ZipFile('build/Android/DynamonsNext.apk') as z:
+          import hashlib, os, struct, subprocess, zipfile
+
+          apk_path = 'build/Android/DynamonsNext.apk'
+          expected_vname = os.environ['EXPECTED_VERSION_NAME']
+          expected_vcode = int(os.environ['EXPECTED_VERSION_CODE'])
+          expected_cert = os.environ['EXPECTED_CERT_SHA256'].lower()
+
+          def read_manifest_attrs(data):
+              u16 = lambda o: struct.unpack_from('<H', data, o)[0]
+              u32 = lambda o: struct.unpack_from('<I', data, o)[0]
+              strings, pos, fsize, out = [], 8, u32(4), {}
+              while pos < len(data) and pos < fsize:
+                  ctype, _, csz = u16(pos), u16(pos + 2), u32(pos + 4)
+                  if ctype == 0x0001:
+                      scount, _, flags, str_off = struct.unpack_from('<IIII', data, pos + 8)
+                      utf8 = bool(flags & 0x100)
+                      offsets = struct.unpack_from(f'<{scount}I', data, pos + 28)
+                      base = pos + str_off
+                      for off in offsets:
+                          p = base + off
+                          if utf8:
+                              p += 1 if (data[p] & 0x80) == 0 else 2
+                              blen = data[p]
+                              if blen & 0x80:
+                                  blen = ((blen & 0x7f) << 8) | data[p + 1]
+                                  p += 2
+                              else:
+                                  p += 1
+                              strings.append(data[p:p + blen].decode('utf-8', 'replace'))
+                          else:
+                              clen = u16(p); p += 2
+                              if clen & 0x8000:
+                                  clen = ((clen & 0x7fff) << 16) | u16(p); p += 2
+                              strings.append(data[p:p + clen * 2].decode('utf-16le', 'replace'))
+                  elif ctype == 0x0102:
+                      nidx = u32(pos + 20)
+                      if nidx < len(strings) and strings[nidx] == 'manifest':
+                          astart, asize, acount = u16(pos + 24), u16(pos + 26), u16(pos + 28)
+                          base = pos + 16 + astart
+                          for i in range(acount):
+                              ao = base + i * asize
+                              an_idx, rv_idx = u32(ao + 4), u32(ao + 8)
+                              v_type, v_data = data[ao + 15], struct.unpack_from('<i', data, ao + 16)[0]
+                              an = strings[an_idx] if an_idx < len(strings) else ''
+                              if rv_idx != 0xffffffff and rv_idx < len(strings):
+                                  out[an] = strings[rv_idx]
+                              elif v_type in (0x10, 0x11):
+                                  out[an] = v_data
+                  if csz == 0:
+                      break
+                  pos += csz
+              return out
+
+          def read_v2_v3_certs(path):
+              blob = open(path, 'rb').read()
+              eocd = blob.rfind(b'PK\x05\x06')
+              cd_off = struct.unpack_from('<I', blob, eocd + 16)[0]
+              assert blob[cd_off - 16:cd_off] == b'APK Sig Block 42', 'Missing APK Signature Scheme v2/v3 block'
+              blk_size = struct.unpack_from('<Q', blob, cd_off - 24)[0]
+              p = cd_off - 8 - blk_size + 8
+              end = cd_off - 24
+              certs = []
+              while p < end:
+                  plen = struct.unpack_from('<Q', blob, p)[0]; p += 8
+                  pid = struct.unpack_from('<I', blob, p)[0]
+                  pdata = blob[p + 4:p + plen]
+                  if pid in (0x7109871a, 0xf05368c0):
+                      slen_total = struct.unpack_from('<I', pdata, 0)[0]
+                      sp = 4
+                      while sp < 4 + slen_total:
+                          slen = struct.unpack_from('<I', pdata, sp)[0]; sp += 4
+                          sdata = pdata[sp:sp + slen]; sp += slen
+                          sd_len = struct.unpack_from('<I', sdata, 0)[0]
+                          sd = sdata[4:4 + sd_len]
+                          dlen = struct.unpack_from('<I', sd, 0)[0]
+                          clen = struct.unpack_from('<I', sd, 4 + dlen)[0]
+                          cp = 4 + dlen + 4
+                          while cp < 4 + dlen + 4 + clen:
+                              c1len = struct.unpack_from('<I', sd, cp)[0]; cp += 4
+                              certs.append(hashlib.sha256(sd[cp:cp + c1len]).hexdigest().lower())
+                              cp += c1len
+                  p += plen
+              return certs
+
+          with zipfile.ZipFile(apk_path) as z:
               man = z.read('AndroidManifest.xml')
               arsc = z.read('resources.arsc')
               ggm = z.read('assets/bin/Data/globalgamemanagers')
@@ -99,6 +217,23 @@ jobs:
                   assert perm in man_text, f'Missing {perm.decode()} in AndroidManifest.xml'
               assert b'Dynamons Next' in arsc_text, 'Missing Dynamons Next app name in resources.arsc'
               assert b'Dynamons Next' in ggm, 'Missing Dynamons Next productName in globalgamemanagers'
+              attrs = read_manifest_attrs(man)
+              print('Parsed manifest attrs:', attrs)
+              assert attrs.get('package') == 'com.dynamons.game', f'Unexpected package: {attrs}'
+              assert attrs.get('versionCode') == expected_vcode and expected_vcode > 1, f'Expected versionCode {expected_vcode}, got {attrs}'
+              assert attrs.get('versionName') == expected_vname, f'Expected versionName {expected_vname}, got {attrs}'
+              v1_files = [n for n in z.namelist() if n.startswith('META-INF/') and (n.endswith('.RSA') or n.endswith('.DSA') or n.endswith('.EC'))]
+              for vf in v1_files:
+                  pem = subprocess.check_output(['openssl', 'pkcs7', '-inform', 'DER', '-print_certs'], input=z.read(vf))
+                  fp_out = subprocess.check_output(['openssl', 'x509', '-noout', '-fingerprint', '-sha256'], input=pem).decode('utf-8', 'replace')
+                  subj_out = subprocess.check_output(['openssl', 'x509', '-noout', '-subject'], input=pem).decode('utf-8', 'replace')
+                  assert 'Android Debug' not in subj_out, f'Ephemeral debug certificate detected in {vf}: {subj_out}'
+                  fp_hex = fp_out.split('=', 1)[1].strip().replace(':', '').lower()
+                  assert fp_hex == expected_cert, f'v1 cert mismatch in {vf}: {fp_hex} != {expected_cert}'
+
+          v23_certs = read_v2_v3_certs(apk_path)
+          print('Parsed v2/v3 cert SHA256:', v23_certs)
+          assert len(v23_certs) > 0 and all(c == expected_cert for c in v23_certs), f'v2/v3 cert mismatch: {v23_certs}'
           PY
           cp build/Android/DynamonsNext.apk DynamonsNext-android-arm64.apk
 

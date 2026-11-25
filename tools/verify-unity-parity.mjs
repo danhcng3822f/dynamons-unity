@@ -514,6 +514,12 @@ function checkFontDesignRulesAndDtoConstraints() {
   assert.ok(releaseWf.includes('gh release create') && releaseWf.includes('--latest'), 'build-release.yml must create a new versioned GitHub Release per build');
   assert.ok(!releaseWf.includes('TAG="latest"'), 'build-release.yml must not overwrite a single mutable latest tag');
   assert.ok(releaseWf.includes('DynamonsNext-android-arm64.apk') && releaseWf.includes('DynamonsNext-linux-x64.tar.gz'), 'build-release.yml must publish both Android APK and Linux tarball');
+  assert.ok(releaseWf.includes('versioning: Custom') && releaseWf.includes('androidVersionCode:'), 'build-release.yml must use versioning: Custom and increasing androidVersionCode for overwrite updates');
+  for (const ksKey of ['androidKeystoreName:', 'androidKeystoreBase64:', 'androidKeystorePass:', 'androidKeyaliasName:', 'androidKeyaliasPass:']) {
+    assert.ok(releaseWf.includes(ksKey), `build-release.yml must configure ${ksKey} for persistent Android signing`);
+  }
+  assert.ok(releaseWf.includes('d20a448a905a852203030f813bdb006f6b6fd254c4ca14c3da6751372eb4539f'),
+    'build-release.yml Verify Android APK must pin the persistent release signing certificate SHA-256');
   for (const perm of androidPermissions) {
     assert.ok(releaseWf.includes(perm), `build-release.yml Verify Android APK must assert ${perm}`);
   }
