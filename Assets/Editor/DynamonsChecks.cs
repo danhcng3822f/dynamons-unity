@@ -228,6 +228,7 @@ namespace Dynamons
                 "Android applicationIdentifier must be com.dynamons.game");
             Check(!PlayerSettings.SplashScreen.show, "Unity SplashScreen must be disabled");
             Check(PlayerSettings.Android.targetArchitectures == AndroidArchitecture.ARM64, "Android target must be ARM64");
+            Check(PlayerSettings.Android.forceInternetPermission, "Android forceInternetPermission must be enabled");
 
             // LAN protocol DTO & perspective codec checks
             string encodedCmd = LanCodec.Encode("action", new LanActionCmdDto { seq = 3, actionType = "ability", id = "hellfire" });

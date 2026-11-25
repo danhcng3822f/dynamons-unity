@@ -401,6 +401,28 @@ function checkFontDesignRulesAndDtoConstraints() {
   assert.ok(buildSettingsTxt.includes('PlayerSettings.productName = "Dynamons Next"'), 'DynamonsBuildSettings.cs must set productName = "Dynamons Next" unconditionally');
   assert.ok(buildSettingsTxt.includes('SetApplicationIdentifier(NamedBuildTarget.Android, "com.dynamons.game")'), 'DynamonsBuildSettings.cs must set Android applicationIdentifier to com.dynamons.game');
   assert.ok(buildSettingsTxt.includes('PlayerSettings.SplashScreen.show = false'), 'DynamonsBuildSettings.cs must disable Unity SplashScreen');
+  assert.ok(buildSettingsTxt.includes('PlayerSettings.Android.forceInternetPermission = true'), 'DynamonsBuildSettings.cs must set PlayerSettings.Android.forceInternetPermission = true');
+
+  const outsideAndroidGuard = buildSettingsTxt.replace(/#if\s+UNITY_ANDROID[\s\S]*?#endif/g, '');
+  assert.ok(!/UnityEditor\.Android/.test(outsideAndroidGuard) && !/IPostGenerateGradleAndroidProject/.test(outsideAndroidGuard),
+    'DynamonsBuildSettings.cs must guard UnityEditor.Android and IPostGenerateGradleAndroidProject strictly inside #if UNITY_ANDROID');
+  const androidBlocks = [...buildSettingsTxt.matchAll(/#if\s+UNITY_ANDROID([\s\S]*?)#endif/g)].map(m => m[1]).join('\n');
+  assert.ok(androidBlocks.includes('using UnityEditor.Android;'), 'DynamonsBuildSettings.cs must import UnityEditor.Android inside #if UNITY_ANDROID');
+  assert.ok(androidBlocks.includes('IPostGenerateGradleAndroidProject') && androidBlocks.includes('OnPostGenerateGradleAndroidProject'),
+    'DynamonsBuildSettings.cs must implement IPostGenerateGradleAndroidProject inside #if UNITY_ANDROID');
+  for (const manifestPath of ['src/main/AndroidManifest.xml', '../launcher/src/main/AndroidManifest.xml']) {
+    assert.ok(androidBlocks.includes(manifestPath), `DynamonsBuildSettings.cs must check ${manifestPath}`);
+  }
+  const androidPermissions = [
+    'android.permission.INTERNET',
+    'android.permission.ACCESS_NETWORK_STATE',
+    'android.permission.ACCESS_WIFI_STATE',
+    'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+  ];
+  for (const perm of androidPermissions) {
+    assert.ok(androidBlocks.includes(perm), `DynamonsBuildSettings.cs must declare ${perm} inside #if UNITY_ANDROID`);
+  }
+
   assert.ok(assetExists('splash/app_icon', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/app_icon.png');
   assert.ok(assetExists('splash/logo', ['.png']), 'Missing Assets/Resources/Dynamons/Art/splash/logo.png');
   assert.ok(assetExists('map/island_lan', ['.png']), 'Missing Assets/Resources/Dynamons/Art/map/island_lan.png');
@@ -413,6 +435,9 @@ function checkFontDesignRulesAndDtoConstraints() {
   assert.ok(releaseWf.includes('gh release create') && releaseWf.includes('--latest'), 'build-release.yml must create a new versioned GitHub Release per build');
   assert.ok(!releaseWf.includes('TAG="latest"'), 'build-release.yml must not overwrite a single mutable latest tag');
   assert.ok(releaseWf.includes('DynamonsNext-android-arm64.apk') && releaseWf.includes('DynamonsNext-linux-x64.tar.gz'), 'build-release.yml must publish both Android APK and Linux tarball');
+  for (const perm of androidPermissions) {
+    assert.ok(releaseWf.includes(perm), `build-release.yml Verify Android APK must assert ${perm}`);
+  }
 
   for (const dtoFile of [
     join(assetsDir, 'Scripts', 'Core', 'GameData.cs'),

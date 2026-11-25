@@ -90,6 +90,13 @@ jobs:
               arsc_text = arsc + arsc.replace(b'\x00', b'')
               assert b'com.dynamons.game' in man_text, 'Missing com.dynamons.game in AndroidManifest.xml'
               assert b'com.Dynamons.workspace' not in man_text, 'Unexpected workspace package ID'
+              for perm in (
+                  b'android.permission.INTERNET',
+                  b'android.permission.ACCESS_NETWORK_STATE',
+                  b'android.permission.ACCESS_WIFI_STATE',
+                  b'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+              ):
+                  assert perm in man_text, f'Missing {perm.decode()} in AndroidManifest.xml'
               assert b'Dynamons Next' in arsc_text, 'Missing Dynamons Next app name in resources.arsc'
               assert b'Dynamons Next' in ggm, 'Missing Dynamons Next productName in globalgamemanagers'
           PY

@@ -2,6 +2,13 @@ using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using UnityEngine;
+#if UNITY_ANDROID
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Xml;
+using UnityEditor.Android;
+#endif
 
 namespace Dynamons
 {
@@ -44,6 +51,7 @@ namespace Dynamons
             }
             if (PlayerSettings.Android.targetArchitectures != AndroidArchitecture.ARM64)
                 PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
+            PlayerSettings.Android.forceInternetPermission = true;
         }
 
         private static void ConfigureTarget(NamedBuildTarget target)
@@ -68,4 +76,75 @@ namespace Dynamons
             }
         }
     }
+
+#if UNITY_ANDROID
+    /// <summary>Ensures generated Android Gradle manifests declare Internet, network state, Wi-Fi state, and multicast permissions.</summary>
+    internal sealed class DynamonsAndroidManifestPostProcessor : IPostGenerateGradleAndroidProject
+    {
+        public int callbackOrder => 0;
+
+        private const string AndroidNamespace = "http://schemas.android.com/apk/res/android";
+
+        private static readonly string[] RequiredPermissions =
+        {
+            "android.permission.INTERNET",
+            "android.permission.ACCESS_NETWORK_STATE",
+            "android.permission.ACCESS_WIFI_STATE",
+            "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+        };
+
+        public void OnPostGenerateGradleAndroidProject(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            InjectPermissions(Path.Combine(path, "src/main/AndroidManifest.xml"));
+            InjectPermissions(Path.Combine(path, "../launcher/src/main/AndroidManifest.xml"));
+        }
+
+        private static void InjectPermissions(string manifestPath)
+        {
+            if (!File.Exists(manifestPath)) return;
+
+            var doc = new XmlDocument { PreserveWhitespace = true };
+            doc.Load(manifestPath);
+            XmlElement root = doc.DocumentElement;
+            if (root == null) return;
+
+            string androidPrefix = root.GetPrefixOfNamespace(AndroidNamespace);
+            if (string.IsNullOrEmpty(androidPrefix)) androidPrefix = "android";
+
+            var existing = new HashSet<string>(StringComparer.Ordinal);
+            XmlNode appNode = null;
+            foreach (XmlNode node in root.ChildNodes)
+            {
+                if (!(node is XmlElement el)) continue;
+                if (el.LocalName == "uses-permission")
+                {
+                    string name = el.GetAttribute("name", AndroidNamespace);
+                    if (string.IsNullOrEmpty(name)) name = el.GetAttribute(androidPrefix + ":name");
+                    if (!string.IsNullOrEmpty(name)) existing.Add(name);
+                }
+                else if (appNode == null && el.LocalName == "application")
+                {
+                    appNode = el;
+                }
+            }
+            if (appNode == null) return;
+
+            bool changed = false;
+            foreach (string perm in RequiredPermissions)
+            {
+                if (existing.Contains(perm)) continue;
+                XmlElement el = doc.CreateElement("uses-permission");
+                XmlAttribute attr = doc.CreateAttribute(androidPrefix, "name", AndroidNamespace);
+                attr.Value = perm;
+                el.SetAttributeNode(attr);
+                root.InsertBefore(el, appNode);
+                root.InsertBefore(doc.CreateWhitespace("\n    "), appNode);
+                changed = true;
+            }
+
+            if (changed) doc.Save(manifestPath);
+        }
+    }
+#endif
 }
