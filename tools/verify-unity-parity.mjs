@@ -287,12 +287,16 @@ function checkFontDesignRulesAndDtoConstraints() {
         assert.ok(modalBody.includes(expected), `OpenLanNpcModal() missing ${expected}`);
       }
     }
+    if (rel.endsWith('GameUi.cs')) {
+      const textFieldBody = extractBraceBlock(txt, /public\s+InputField\s+TextField\s*\([^)]*\)/);
+      assert.ok(textFieldBody !== null, 'GameUi.cs must define public InputField TextField(...)');
+      assert.ok(textFieldBody.includes('fontSize = 13') && txt.includes('LegacyRuntime.ttf'),
+        'GameUi.TextField() must style InputField text with LegacyRuntime.ttf at 13px');
+    }
     if (rel.endsWith('GameRoot.cs')) {
       const updateBody = extractBraceBlock(txt, /void\s+Update\s*\(\s*\)/);
       assert.ok(updateBody !== null && /UpdateLanNetworking\s*\(\s*\)/.test(updateBody), 'GameRoot.cs Update() must call UpdateLanNetworking()');
-      assert.ok(/\bvoid\s+UpdateLanNetworking\s*\(\s*\)/.test(txt), 'GameRoot.cs must define UpdateLanNetworking()');
-      assert.ok(/\bvoid\s+ShutdownLanNetworking\s*\(\s*\)/.test(txt), 'GameRoot.cs must define ShutdownLanNetworking()');
-      assert.ok(/\bvoid\s+OpenLanLobby\s*\(\s*\)/.test(txt), 'GameRoot.cs must define OpenLanLobby()');
+      assert.ok(!txt.includes('LAN LOBBY WILL OPEN HERE'), 'GameRoot.cs must not keep Task 5 OpenLanLobby stub');
       const onDestroyBody = extractBraceBlock(txt, /void\s+OnDestroy\s*\(\s*\)/);
       assert.ok(onDestroyBody !== null && /ShutdownLanNetworking\s*\(\s*\)/.test(onDestroyBody), 'GameRoot.cs OnDestroy() must call ShutdownLanNetworking()');
       const onQuitBody = extractBraceBlock(txt, /void\s+OnApplicationQuit\s*\(\s*\)/);
@@ -301,6 +305,27 @@ function checkFontDesignRulesAndDtoConstraints() {
       const chooseBody = extractBraceBlock(txt, /void\s+Choose\s*\(\s*\)/);
       assert.ok(splashBody !== null && /onLanIsland\s*=\s*false/.test(splashBody), 'GameRoot.cs Splash() must reset onLanIsland = false');
       assert.ok(chooseBody !== null && /onLanIsland\s*=\s*false/.test(chooseBody), 'GameRoot.cs Choose() must reset onLanIsland = false');
+    }
+    if (rel.endsWith('PvpLobbyView.cs')) {
+      assert.ok(/\bvoid\s+UpdateLanNetworking\s*\(\s*\)/.test(txt), 'PvpLobbyView.cs must define UpdateLanNetworking()');
+      assert.ok(/\bvoid\s+ShutdownLanNetworking\s*\(\s*\)/.test(txt), 'PvpLobbyView.cs must define ShutdownLanNetworking()');
+      assert.ok(/\bvoid\s+OpenLanLobby\s*\(\s*\)/.test(txt), 'PvpLobbyView.cs must define OpenLanLobby()');
+      assert.ok(/\bvoid\s+CloseLanLobby\s*\(/.test(txt), 'PvpLobbyView.cs must define CloseLanLobby()');
+      assert.ok(/\bvoid\s+BeginPvpBattle\s*\(\s*LanStartMatchDto\s+[^,]+,\s*bool\s+[^)]+\)/.test(txt),
+        'PvpLobbyView.cs must expose BeginPvpBattle(LanStartMatchDto, bool) hook');
+      assert.ok(/\bvoid\s+OnPvpNetMessage\s*\(\s*LanNetMessage\s+[^)]+\)/.test(txt),
+        'PvpLobbyView.cs must expose OnPvpNetMessage(LanNetMessage) hook');
+      assert.ok(txt.includes('ui.TextField('), 'PvpLobbyView.cs must use GameUi.TextField for manual IP entry');
+      assert.ok(txt.includes('HudWidgets.DrawMonPane('), 'PvpLobbyView.cs must render team previews via HudWidgets.DrawMonPane');
+      assert.ok(txt.includes('DrainMainThreadMessages(') && txt.includes('GetRooms(') && txt.includes('UpdateBeacon('),
+        'PvpLobbyView.cs must pump LanTransport messages, rooms, and beacons on the main thread');
+      for (const expected of ['"hello"', '"start"', '"disconnected"', '"connected"',
+        '"FAIR LV 20"', '"REAL TEAM"', '"ITEMS ON"', '"ITEMS OFF"',
+        '"HOST ROOM"', '"JOIN ROOM"', '"CONNECT"', '"START DUEL"', '"WAITING FOR HOST"']) {
+        assert.ok(txt.includes(expected), `PvpLobbyView.cs missing ${expected}`);
+      }
+      assert.ok(!/(?:save\.Team\.(?:Add|Remove|Clear)|save\.Inventory\.(?:Add|Remove|Clear)|save\.(?:Take|Add)\(|save\.NodeId\s*=)/.test(txt),
+        'PvpLobbyView.cs must keep SaveData Team/Inventory/NodeId strictly read-only');
     }
     if (rel.endsWith('BattleView.cs')) {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
@@ -312,6 +337,9 @@ function checkFontDesignRulesAndDtoConstraints() {
       assert.ok(!/\bui\.Label\(/.test(txt), `${rel}: Must use BitmapFontRegistry instead of legacy ui.Label`);
     }
   }
+
+  assert.ok(existsSync(join(assetsDir, 'Scripts', 'Unity', 'PvpLobbyView.cs')),
+    'Missing Assets/Scripts/Unity/PvpLobbyView.cs');
 
   const buildSettingsTxt = readFileSync(join(assetsDir, 'Editor', 'DynamonsBuildSettings.cs'), 'utf8');
   assert.ok(buildSettingsTxt.includes('PlayerSettings.productName = "Dynamons Next"'), 'DynamonsBuildSettings.cs must set productName = "Dynamons Next" unconditionally');

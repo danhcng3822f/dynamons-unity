@@ -188,6 +188,57 @@ namespace Dynamons
             text.font = font; text.text = content; text.fontSize = size; text.alignment = alignment; text.color = color ?? Color.white;
             text.raycastTarget = false; text.supportRichText = false; return text;
         }
+        public InputField TextField(Transform parent, string initial, string placeholder, float x, float y, float w, float h)
+        {
+            var root = Box("TextField", parent, x, y, w, h);
+            var hit = root.gameObject.AddComponent<Image>();
+            hit.color = Color.clear;
+            hit.raycastTarget = true;
+
+            var chrome = VectorCanvas.Create("TextFieldChrome", root, 0f, 0f, w, h);
+            chrome.FillRoundRect(0f, 0f, w, h, 7f, HexColor("#e8b35a"));
+            chrome.FillRoundRect(1.5f, 1.5f, Mathf.Max(2f, w - 3f), Mathf.Max(2f, h - 3f), 5.5f, HexColor("#151026"));
+            chrome.Commit();
+
+            float areaW = Mathf.Max(4f, w - 16f);
+            float areaH = Mathf.Max(4f, h - 4f);
+            var textArea = Box("TextArea", root, 8f, 2f, areaW, areaH);
+            textArea.gameObject.AddComponent<RectMask2D>();
+
+            var ph = Box("Placeholder", textArea, 0f, 0f, areaW, areaH).gameObject.AddComponent<Text>();
+            ph.font = font;
+            ph.fontSize = 13;
+            ph.fontStyle = FontStyle.Italic;
+            ph.alignment = TextAnchor.MiddleLeft;
+            ph.color = new Color(0.66f, 0.63f, 0.78f, 0.65f);
+            ph.horizontalOverflow = HorizontalWrapMode.Overflow;
+            ph.supportRichText = false;
+            ph.raycastTarget = false;
+            ph.text = placeholder ?? string.Empty;
+
+            var valueText = Box("Text", textArea, 0f, 0f, areaW, areaH).gameObject.AddComponent<Text>();
+            valueText.font = font;
+            valueText.fontSize = 13;
+            valueText.alignment = TextAnchor.MiddleLeft;
+            valueText.color = Color.white;
+            valueText.horizontalOverflow = HorizontalWrapMode.Overflow;
+            valueText.supportRichText = false;
+            valueText.raycastTarget = false;
+
+            var input = root.gameObject.AddComponent<InputField>();
+            input.targetGraphic = hit;
+            input.transition = Selectable.Transition.None;
+            input.textComponent = valueText;
+            input.placeholder = ph;
+            input.lineType = InputField.LineType.SingleLine;
+            input.characterLimit = 64;
+            input.customCaretColor = true;
+            input.caretColor = Color.white;
+            input.caretWidth = 2;
+            input.selectionColor = new Color(0.28f, 0.56f, 1f, 0.45f);
+            input.text = initial ?? string.Empty;
+            return input;
+        }
         public void Heading(Transform parent, FontData bitmap, string title, float y)
         {
             if (bitmap == null || title.Any(c => c != ' ' && Array.IndexOf(bitmap.chars, (int)c) < 0))

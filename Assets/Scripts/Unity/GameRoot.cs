@@ -69,25 +69,10 @@ namespace Dynamons
 
         private void OnApplicationQuit() => ShutdownLanNetworking();
 
-        /// <summary>Opens the LAN PvP lobby overlay (replaced by PvpLobbyView in Task 6).</summary>
-        internal void OpenLanLobby()
-        {
-            Note("LAN LOBBY WILL OPEN HERE.");
-        }
-
-        /// <summary>Polls active LAN socket messages on the Unity main thread (wired in Task 6).</summary>
-        internal void UpdateLanNetworking()
-        {
-        }
-
-        /// <summary>Closes and disposes active LAN network resources safely on quit or teardown.</summary>
-        internal void ShutdownLanNetworking()
-        {
-        }
-
-        /// <summary>Rebuilds the map with the player standing beside the LAN Island NPC.</summary>
+        /// <summary>Stops any active PvP session and rebuilds the map with the player standing beside the LAN Island NPC.</summary>
         internal void ReturnToLanIsland()
         {
+            StopLanSession();
             onLanIsland = true;
             ShowMap();
         }
@@ -115,6 +100,7 @@ namespace Dynamons
             ResetMapVisualRefs();
             ResetBattleState();
             ResetCollectionState();
+            ResetLanLobbyRefs();
             starterModalDynamic = null;
             GameUi.Clear(ui.Frame);
             overlay = null;
