@@ -506,6 +506,7 @@ namespace Dynamons
                 isConnected = false;
                 boundPort = 0;
                 Volatile.Write(ref beaconBytes, null);
+                Interlocked.Exchange(ref lastRecvUtcTicks, 0);
 
                 DetachAndCloseSocketsLocked(out listenerToClose, out streamToClose, out clientToClose,
                     out udpHostToClose, out udpDiscToClose);
@@ -792,8 +793,9 @@ namespace Dynamons
 
                         peerClient = incoming;
                         peerStream = stream;
-                        isConnected = true;
                         Interlocked.Exchange(ref lastRecvUtcTicks, DateTime.UtcNow.Ticks);
+                        Thread.MemoryBarrier();
+                        isConnected = true;
                         incomingQueue.Enqueue(new RawNetEvent { Gen = gen, Kind = RawKindConnected });
                         tcpReaderThread = StartThread("LanTcpReader", () => TcpReaderLoop(gen, incoming, stream));
                         tcpWriterThread = StartThread("LanTcpWriter", () => TcpWriterLoop(gen, stream));
@@ -855,8 +857,9 @@ namespace Dynamons
 
                     peerClient = client;
                     peerStream = stream;
-                    isConnected = true;
                     Interlocked.Exchange(ref lastRecvUtcTicks, DateTime.UtcNow.Ticks);
+                    Thread.MemoryBarrier();
+                    isConnected = true;
                     incomingQueue.Enqueue(new RawNetEvent { Gen = gen, Kind = RawKindConnected });
                     tcpReaderThread = StartThread("LanTcpReader", () => TcpReaderLoop(gen, client, stream));
                     tcpWriterThread = StartThread("LanTcpWriter", () => TcpWriterLoop(gen, stream));
