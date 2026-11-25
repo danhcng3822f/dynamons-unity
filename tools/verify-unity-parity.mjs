@@ -349,6 +349,8 @@ function checkFontDesignRulesAndDtoConstraints() {
       const helloCaseBody = extractBraceBlock(lobbyMsgBody, /case\s+"hello"\s*:/);
       assert.ok(helloCaseBody !== null && /pvpRemoteRematchRequested\s*=\s*false\s*;/.test(helloCaseBody),
         'PvpLobbyView.cs HandleLobbyNetMessage() "hello" handshake must clear pvpRemoteRematchRequested = false');
+      assert.ok(disconnectBody.includes('41976') && disconnectBody.includes('TIMED OUT'),
+        'PvpLobbyView.cs HandleLobbyPeerDisconnect() must surface actionable firewall/host hint on timeout');
     }
     if (rel.endsWith('LanTransport.cs')) {
       const drainBody = extractBraceBlock(txt, /List<LanNetMessage>\s+DrainMainThreadMessages\s*\([^)]*\)/);
@@ -368,8 +370,29 @@ function checkFontDesignRulesAndDtoConstraints() {
         /isConnected\s*=\s*false\s*;/.test(closeDisconnectBody) &&
         /isHost\s*=\s*false\s*;/.test(closeDisconnectBody) &&
         /boundPort\s*=\s*0\s*;/.test(closeDisconnectBody),
-        'CloseSocketsForDisconnect() must reset isConnected = false, isHost = false, and boundPort = 0',
+        'CloseSocketsForDisconnect() must reset isConnected, isHost, and boundPort',
       );
+      for (const expected of [
+        'LanConst.DiscoveryMulticastIp',
+        'JoinMulticastGroup',
+        'AcquireAndroidMulticastLock',
+        'ReleaseAndroidMulticastLock',
+        'CollectAndroidLanInterfaces',
+        'ComputeBroadcastIp',
+        'IsVirtualInterfaceName',
+      ]) {
+        assert.ok(txt.includes(expected), `LanTransport.cs missing LAN reliability helper: ${expected}`);
+      }
+      for (const bgLoop of ['UdpBeaconLoop', 'UdpDiscoveryLoop', 'TcpAcceptLoop', 'TcpConnectLoop', 'TcpReaderLoop', 'TcpWriterLoop']) {
+        const bgBody = extractBraceBlock(txt, new RegExp(`void\\s+${bgLoop}\\s*\\([^)]*\\)`));
+        assert.ok(bgBody !== null, `LanTransport.cs must define ${bgLoop}()`);
+        assert.ok(!/AndroidJava|ConnectivityManager|MulticastLock|JsonUtility/.test(bgBody),
+          `LanTransport.cs ${bgLoop}() must never touch Unity JNI or JsonUtility on a background thread`);
+      }
+    }
+    if (rel.endsWith('LanProtocol.cs')) {
+      assert.ok(txt.includes('DiscoveryMulticastIp = "239.255.41.75"'),
+        'LanProtocol.cs must define LanConst.DiscoveryMulticastIp');
     }
     if (rel.endsWith('BattleView.cs')) {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');

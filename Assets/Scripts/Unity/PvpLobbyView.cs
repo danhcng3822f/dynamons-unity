@@ -999,7 +999,14 @@ namespace Dynamons
         {
             ui.Sound("stat_lowered", save);
             lobbyStatusIsError = true;
-            lobbyStatusMessage = string.IsNullOrEmpty(reason) ? "DISCONNECTED" : reason;
+            string cleanReason = string.IsNullOrEmpty(reason) ? "DISCONNECTED" : reason;
+            if (!lobbyHostMode && !lobbyInReadyRoom &&
+                (cleanReason.IndexOf("TIMED OUT", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 cleanReason.IndexOf("TIMEOUT", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                cleanReason = "TIMED OUT. CHECK WI-FI, ALLOW PORT 41976, OR HOST ON ANDROID.";
+            }
+            lobbyStatusMessage = cleanReason;
 
             if (lobbyHostMode)
             {

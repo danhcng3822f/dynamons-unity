@@ -624,6 +624,22 @@ namespace Dynamons
             Check(localIps != null &&
                   localIps.All(ip => !string.IsNullOrEmpty(ip) && ip != "127.0.0.1" && !ip.StartsWith("169.254.", StringComparison.Ordinal)),
                 "LanTransport.LocalIpv4Addresses filters loopback and link-local addresses");
+            Check(LanConst.DiscoveryMulticastIp == "239.255.41.75", "LanConst.DiscoveryMulticastIp must match expected LAN multicast group");
+            Check(Equals(LanTransport.PrefixLengthToMask(24), System.Net.IPAddress.Parse("255.255.255.0")) &&
+                  Equals(LanTransport.PrefixLengthToMask(16), System.Net.IPAddress.Parse("255.255.0.0")),
+                "LanTransport.PrefixLengthToMask computes exact IPv4 netmasks");
+            Check(Equals(LanTransport.ComputeBroadcastIp(System.Net.IPAddress.Parse("192.168.1.45"), System.Net.IPAddress.Parse("255.255.255.0")),
+                      System.Net.IPAddress.Parse("192.168.1.255")) &&
+                  Equals(LanTransport.ComputeBroadcastIp(System.Net.IPAddress.Parse("10.0.5.12"), System.Net.IPAddress.Parse("255.255.0.0")),
+                      System.Net.IPAddress.Parse("10.0.255.255")) &&
+                  Equals(LanTransport.ComputeBroadcastIp(System.Net.IPAddress.Parse("192.168.50.10"), null),
+                      System.Net.IPAddress.Parse("192.168.50.255")),
+                "LanTransport.ComputeBroadcastIp handles directed masks and /24 fallback");
+            Check(LanTransport.IsVirtualInterfaceName("docker0") &&
+                  LanTransport.IsVirtualInterfaceName("virbr0") &&
+                  !LanTransport.IsVirtualInterfaceName("wlan0") &&
+                  !LanTransport.IsVirtualInterfaceName("wlp3s0"),
+                "LanTransport.IsVirtualInterfaceName distinguishes virtual bridges from physical Wi-Fi");
 
             var dummyRoom = new LanDiscoveredRoom
             {

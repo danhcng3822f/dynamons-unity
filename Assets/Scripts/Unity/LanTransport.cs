@@ -72,6 +72,14 @@ namespace Dynamons
             public byte[] Bytes;
         }
 
+        private struct NicEndpoint
+        {
+            public IPAddress Ip;
+            public IPAddress Broadcast;
+            public string IpText;
+            public int Rank;
+        }
+
         private readonly object stateLock = new object();
         private readonly ConcurrentQueue<RawNetEvent> incomingQueue = new ConcurrentQueue<RawNetEvent>();
         private readonly ConcurrentQueue<RawBeaconPacket> rawBeaconQueue = new ConcurrentQueue<RawBeaconPacket>();
@@ -87,11 +95,15 @@ namespace Dynamons
         private bool disconnectEmitted;
 
         private byte[] beaconBytes;
+        private NicEndpoint[] cachedNics = Array.Empty<NicEndpoint>();
         private TcpListener tcpListener;
         private TcpClient peerClient;
         private NetworkStream peerStream;
         private UdpClient udpHostClient;
         private UdpClient udpDiscoveryClient;
+#if UNITY_ANDROID && !UNITY_EDITOR
+        private AndroidJavaObject androidMulticastLock;
+#endif
 
         private Thread udpBeaconThread;
         private Thread udpDiscoveryThread;
@@ -171,6 +183,10 @@ namespace Dynamons
 
             UpdateBeacon(initialBeacon ?? new LanBeaconDto());
 
+            NicEndpoint[] nics = CollectLanInterfaces();
+            Volatile.Write(ref cachedNics, nics);
+            AcquireAndroidMulticastLock();
+
             UdpClient udp = null;
             try
             {
@@ -192,8 +208,7 @@ namespace Dynamons
                 }
                 udpHostClient = udp;
                 tcpAcceptThread = StartThread("LanTcpAccept", () => TcpAcceptLoop(gen, boundListener));
-                if (udp != null)
-                    udpBeaconThread = StartThread("LanUdpBeacon", () => UdpBeaconLoop(gen, udp));
+                udpBeaconThread = StartThread("LanUdpBeacon", () => UdpBeaconLoop(gen, udp));
             }
         }
 
@@ -229,6 +244,10 @@ namespace Dynamons
                 disconnectEmitted = false;
             }
 
+            NicEndpoint[] nics = CollectLanInterfaces();
+            Volatile.Write(ref cachedNics, nics);
+            AcquireAndroidMulticastLock();
+
             UdpClient udp = null;
             try
             {
@@ -237,6 +256,23 @@ namespace Dynamons
                 udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 udp.EnableBroadcast = true;
                 udp.Client.Bind(new IPEndPoint(IPAddress.Any, LanConst.DiscoveryPort));
+                if (IPAddress.TryParse(LanConst.DiscoveryMulticastIp, out var mcastIp))
+                {
+                    bool joinedAny = false;
+                    for (int i = 0; i < nics.Length; i++)
+                    {
+                        try
+                        {
+                            udp.JoinMulticastGroup(mcastIp, nics[i].Ip);
+                            joinedAny = true;
+                        }
+                        catch (Exception) { }
+                    }
+                    if (!joinedAny)
+                    {
+                        try { udp.JoinMulticastGroup(mcastIp); } catch (Exception) { }
+                    }
+                }
             }
             catch (Exception)
             {
@@ -465,28 +501,13 @@ namespace Dynamons
             return result;
         }
 
-        /// <summary>Returns active non-loopback, non-link-local IPv4 addresses sorted with private LAN subnets first.</summary>
+        /// <summary>Returns active non-loopback, non-link-local IPv4 addresses sorted with physical LAN subnets first.</summary>
         public static string[] LocalIpv4Addresses()
         {
-            var found = new List<(string ip, int rank)>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-
-            EnumerateActiveIpv4((addr, _) =>
-            {
-                string ip = addr.ToString();
-                if (!seen.Add(ip)) return;
-                found.Add((ip, PrivateSubnetRank(addr.GetAddressBytes())));
-            });
-
-            found.Sort((a, b) =>
-            {
-                int cmp = a.rank.CompareTo(b.rank);
-                return cmp != 0 ? cmp : StringComparer.Ordinal.Compare(a.ip, b.ip);
-            });
-
-            var result = new string[found.Count];
-            for (int i = 0; i < found.Count; i++)
-                result[i] = found[i].ip;
+            NicEndpoint[] nics = CollectLanInterfaces();
+            var result = new string[nics.Length];
+            for (int i = 0; i < nics.Length; i++)
+                result[i] = nics[i].IpText;
             return result;
         }
 
@@ -507,6 +528,7 @@ namespace Dynamons
                 isConnected = false;
                 boundPort = 0;
                 Volatile.Write(ref beaconBytes, null);
+                Volatile.Write(ref cachedNics, Array.Empty<NicEndpoint>());
                 Interlocked.Exchange(ref lastRecvUtcTicks, 0);
 
                 DetachAndCloseSocketsLocked(out listenerToClose, out streamToClose, out clientToClose,
@@ -521,6 +543,7 @@ namespace Dynamons
             }
 
             CloseDetachedSockets(listenerToClose, streamToClose, clientToClose, udpHostToClose, udpDiscToClose);
+            ReleaseAndroidMulticastLock();
 
             hasHeartbeatBaseline = false;
             lastRecvUnscaled = 0f;
@@ -637,8 +660,9 @@ namespace Dynamons
             try { sendSignal.Set(); } catch (ObjectDisposedException) { }
         }
 
-        private void UdpBeaconLoop(int gen, UdpClient udp)
+        private void UdpBeaconLoop(int gen, UdpClient fallbackUdp)
         {
+            IPAddress.TryParse(LanConst.DiscoveryMulticastIp, out IPAddress mcastIp);
             try
             {
                 while (!IsSessionCancelled(gen))
@@ -648,32 +672,27 @@ namespace Dynamons
                         byte[] bytes = Volatile.Read(ref beaconBytes);
                         if (bytes != null && bytes.Length > 0)
                         {
-                            List<IPEndPoint> targets = GetBroadcastEndPoints();
+                            NicEndpoint[] nics = Volatile.Read(ref cachedNics);
                             bool anySent = false;
-                            for (int i = 0; i < targets.Count; i++)
+                            if (nics != null)
                             {
-                                if (IsSessionCancelled(gen)) return;
-                                try
+                                for (int i = 0; i < nics.Length; i++)
                                 {
-                                    udp.Send(bytes, bytes.Length, targets[i]);
-                                    anySent = true;
-                                }
-                                catch (SocketException)
-                                {
-                                    // Per-interface broadcast failures must not stop remaining targets.
-                                }
-                                catch (ObjectDisposedException)
-                                {
-                                    return;
+                                    if (IsSessionCancelled(gen)) return;
+                                    if (SendBeaconOnNic(nics[i], bytes, mcastIp))
+                                        anySent = true;
                                 }
                             }
-                            if (!anySent && !IsSessionCancelled(gen))
+                            if (fallbackUdp != null && !IsSessionCancelled(gen))
                             {
-                                try
-                                {
-                                    udp.Send(bytes, bytes.Length, new IPEndPoint(IPAddress.Loopback, LanConst.DiscoveryPort));
-                                }
-                                catch (Exception) { }
+                                if (TrySendUdp(fallbackUdp, bytes, IPAddress.Broadcast))
+                                    anySent = true;
+                                if ((nics == null || nics.Length == 0) && mcastIp != null && TrySendUdp(fallbackUdp, bytes, mcastIp))
+                                    anySent = true;
+                            }
+                            if (!anySent && fallbackUdp != null && !IsSessionCancelled(gen))
+                            {
+                                TrySendUdp(fallbackUdp, bytes, IPAddress.Loopback);
                             }
                         }
                     }
@@ -688,6 +707,56 @@ namespace Dynamons
             }
             catch (Exception)
             {
+            }
+        }
+
+        private static bool SendBeaconOnNic(NicEndpoint nic, byte[] bytes, IPAddress mcastIp)
+        {
+            if (nic.Ip == null) return false;
+            UdpClient perNic = null;
+            bool sent = false;
+            try
+            {
+                perNic = new UdpClient(new IPEndPoint(nic.Ip, 0));
+                perNic.EnableBroadcast = true;
+                try
+                {
+                    perNic.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, nic.Ip.GetAddressBytes());
+                }
+                catch (Exception) { }
+
+                if (nic.Broadcast != null && TrySendUdp(perNic, bytes, nic.Broadcast)) sent = true;
+                if (TrySendUdp(perNic, bytes, IPAddress.Broadcast)) sent = true;
+                if (mcastIp != null && TrySendUdp(perNic, bytes, mcastIp)) sent = true;
+            }
+            catch (SocketException)
+            {
+            }
+            catch (Exception)
+            {
+            }
+            finally
+            {
+                CloseQuietly(perNic);
+            }
+            return sent;
+        }
+
+        private static bool TrySendUdp(UdpClient udp, byte[] bytes, IPAddress dst)
+        {
+            if (udp == null || bytes == null || dst == null) return false;
+            try
+            {
+                udp.Send(bytes, bytes.Length, new IPEndPoint(dst, LanConst.DiscoveryPort));
+                return true;
+            }
+            catch (SocketException)
+            {
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
             }
         }
 
@@ -974,32 +1043,307 @@ namespace Dynamons
             }
         }
 
-        private static List<IPEndPoint> GetBroadcastEndPoints()
+        private static NicEndpoint[] CollectLanInterfaces()
         {
-            var targets = new List<IPEndPoint> { new IPEndPoint(IPAddress.Broadcast, LanConst.DiscoveryPort) };
-            var seen = new HashSet<string>(StringComparer.Ordinal) { IPAddress.Broadcast.ToString() };
+            var byIp = new Dictionary<string, NicEndpoint>(StringComparer.Ordinal);
 
-            EnumerateActiveIpv4((addr, mask) =>
+            void AddNic(IPAddress addr, IPAddress mask, int priorityBase)
             {
-                if (mask == null || mask.AddressFamily != AddressFamily.InterNetwork) return;
+                if (addr == null || addr.AddressFamily != AddressFamily.InterNetwork) return;
+                if (IPAddress.IsLoopback(addr)) return;
                 byte[] ipBytes = addr.GetAddressBytes();
-                byte[] maskBytes = mask.GetAddressBytes();
-                if (ipBytes == null || maskBytes == null || ipBytes.Length != 4 || maskBytes.Length != 4) return;
-                if (IsAllSameByte(maskBytes, 0) || IsAllSameByte(maskBytes, 255)) return;
+                if (ipBytes == null || ipBytes.Length != 4 || ipBytes[0] == 0) return;
+                if (ipBytes[0] == 169 && ipBytes[1] == 254) return;
 
-                byte[] bcastBytes = new byte[4];
-                for (int i = 0; i < 4; i++)
-                    bcastBytes[i] = (byte)(ipBytes[i] | (byte)~maskBytes[i]);
+                string ipText = addr.ToString();
+                int rank = priorityBase + PrivateSubnetRank(ipBytes);
+                IPAddress bcast = ComputeBroadcastIp(addr, mask);
+                if (byIp.TryGetValue(ipText, out var existing) && existing.Rank <= rank)
+                {
+                    if (existing.Broadcast == null && bcast != null)
+                    {
+                        existing.Broadcast = bcast;
+                        byIp[ipText] = existing;
+                    }
+                    return;
+                }
 
-                var bcastAddr = new IPAddress(bcastBytes);
-                if (seen.Add(bcastAddr.ToString()))
-                    targets.Add(new IPEndPoint(bcastAddr, LanConst.DiscoveryPort));
+                byIp[ipText] = new NicEndpoint
+                {
+                    Ip = addr,
+                    Broadcast = bcast,
+                    IpText = ipText,
+                    Rank = rank
+                };
+            }
+
+            CollectAndroidLanInterfaces(AddNic);
+            EnumerateActiveIpv4((addr, mask, isVirtual) => AddNic(addr, mask, isVirtual ? 100 : 15));
+
+            var list = new List<NicEndpoint>(byIp.Values);
+            list.Sort((a, b) =>
+            {
+                int cmp = a.Rank.CompareTo(b.Rank);
+                return cmp != 0 ? cmp : StringComparer.Ordinal.Compare(a.IpText, b.IpText);
             });
-
-            return targets;
+            return list.ToArray();
         }
 
-        private static void EnumerateActiveIpv4(Action<IPAddress, IPAddress> onUnicast)
+        private static void CollectAndroidLanInterfaces(Action<IPAddress, IPAddress, int> addNic)
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var appContext = activity != null ? activity.Call<AndroidJavaObject>("getApplicationContext") : null)
+                {
+                    if (appContext == null) return;
+
+                    try
+                    {
+                        using (var connMgr = appContext.Call<AndroidJavaObject>("getSystemService", "connectivity"))
+                        {
+                            var networks = connMgr != null ? connMgr.Call<AndroidJavaObject[]>("getAllNetworks") : null;
+                            if (networks != null)
+                            {
+                                for (int i = 0; i < networks.Length; i++)
+                                {
+                                    var net = networks[i];
+                                    if (net == null) continue;
+                                    try
+                                    {
+                                        int netRank = 20;
+                                        using (var caps = connMgr.Call<AndroidJavaObject>("getNetworkCapabilities", net))
+                                        {
+                                            if (caps != null)
+                                            {
+                                                if (caps.Call<bool>("hasTransport", 0) || caps.Call<bool>("hasTransport", 4))
+                                                    continue;
+                                                if (caps.Call<bool>("hasTransport", 1)) netRank = 0;
+                                                else if (caps.Call<bool>("hasTransport", 3)) netRank = 10;
+                                            }
+                                        }
+                                        using (var lp = connMgr.Call<AndroidJavaObject>("getLinkProperties", net))
+                                        using (var links = lp != null ? lp.Call<AndroidJavaObject>("getLinkAddresses") : null)
+                                        {
+                                            if (links == null) continue;
+                                            int count = links.Call<int>("size");
+                                            for (int j = 0; j < count; j++)
+                                            {
+                                                using (var la = links.Call<AndroidJavaObject>("get", j))
+                                                using (var inet = la != null ? la.Call<AndroidJavaObject>("getAddress") : null)
+                                                {
+                                                    string hostAddr = inet != null ? inet.Call<string>("getHostAddress") : null;
+                                                    if (!string.IsNullOrEmpty(hostAddr) &&
+                                                        IPAddress.TryParse(hostAddr, out IPAddress parsedIp) &&
+                                                        parsedIp.AddressFamily == AddressFamily.InterNetwork)
+                                                    {
+                                                        int prefix = la.Call<int>("getPrefixLength");
+                                                        addNic(parsedIp, PrefixLengthToMask(prefix), netRank);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch (Exception) { }
+                                    finally { net.Dispose(); }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception) { }
+
+                    try
+                    {
+                        using (var wifiMgr = appContext.Call<AndroidJavaObject>("getSystemService", "wifi"))
+                        using (var wifiInfo = wifiMgr != null ? wifiMgr.Call<AndroidJavaObject>("getConnectionInfo") : null)
+                        {
+                            int rawIp = wifiInfo != null ? wifiInfo.Call<int>("getIpAddress") : 0;
+                            if (rawIp != 0)
+                            {
+                                var ip = new IPAddress(new[]
+                                {
+                                    (byte)(rawIp & 0xff),
+                                    (byte)((rawIp >> 8) & 0xff),
+                                    (byte)((rawIp >> 16) & 0xff),
+                                    (byte)((rawIp >> 24) & 0xff)
+                                });
+                                IPAddress mask = null;
+                                using (var dhcp = wifiMgr.Call<AndroidJavaObject>("getDhcpInfo"))
+                                {
+                                    int rawMask = dhcp != null ? dhcp.Get<int>("netmask") : 0;
+                                    if (rawMask != 0)
+                                    {
+                                        mask = new IPAddress(new[]
+                                        {
+                                            (byte)(rawMask & 0xff),
+                                            (byte)((rawMask >> 8) & 0xff),
+                                            (byte)((rawMask >> 16) & 0xff),
+                                            (byte)((rawMask >> 24) & 0xff)
+                                        });
+                                    }
+                                }
+                                addNic(ip, mask, 0);
+                            }
+                        }
+                    }
+                    try
+                    {
+                        using (var netIfCls = new AndroidJavaClass("java.net.NetworkInterface"))
+                        using (var enumIfs = netIfCls.CallStatic<AndroidJavaObject>("getNetworkInterfaces"))
+                        {
+                            while (enumIfs != null && enumIfs.Call<bool>("hasMoreElements"))
+                            {
+                                using (var jNic = enumIfs.Call<AndroidJavaObject>("nextElement"))
+                                {
+                                    if (jNic == null) continue;
+                                    try
+                                    {
+                                        if (!jNic.Call<bool>("isUp") || jNic.Call<bool>("isLoopback")) continue;
+                                        string ifName = jNic.Call<string>("getName") ?? string.Empty;
+                                        if (ifName.StartsWith("rmnet", StringComparison.OrdinalIgnoreCase) ||
+                                            ifName.StartsWith("ccmni", StringComparison.OrdinalIgnoreCase) ||
+                                            ifName.StartsWith("pdp", StringComparison.OrdinalIgnoreCase) ||
+                                            IsVirtualInterfaceName(ifName))
+                                            continue;
+                                        int ifRank = ifName.StartsWith("wlan", StringComparison.OrdinalIgnoreCase) ||
+                                                     ifName.StartsWith("ap", StringComparison.OrdinalIgnoreCase) ||
+                                                     ifName.StartsWith("swlan", StringComparison.OrdinalIgnoreCase)
+                                            ? 5 : 12;
+                                        using (var ifAddrs = jNic.Call<AndroidJavaObject>("getInterfaceAddresses"))
+                                        {
+                                            if (ifAddrs == null) continue;
+                                            int addrCount = ifAddrs.Call<int>("size");
+                                            for (int k = 0; k < addrCount; k++)
+                                            {
+                                                using (var ia = ifAddrs.Call<AndroidJavaObject>("get", k))
+                                                using (var inet = ia != null ? ia.Call<AndroidJavaObject>("getAddress") : null)
+                                                {
+                                                    string hostAddr = inet != null ? inet.Call<string>("getHostAddress") : null;
+                                                    if (!string.IsNullOrEmpty(hostAddr) &&
+                                                        IPAddress.TryParse(hostAddr, out IPAddress parsedIp) &&
+                                                        parsedIp.AddressFamily == AddressFamily.InterNetwork)
+                                                    {
+                                                        short prefix = ia.Call<short>("getNetworkPrefixLength");
+                                                        addNic(parsedIp, PrefixLengthToMask(prefix), ifRank);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch (Exception) { }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception) { }
+                }
+            }
+            catch (Exception) { }
+#endif
+        }
+
+        private void AcquireAndroidMulticastLock()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            ReleaseAndroidMulticastLock();
+            try
+            {
+                using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+                using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+                using (var appContext = activity != null ? activity.Call<AndroidJavaObject>("getApplicationContext") : null)
+                using (var wifiMgr = appContext != null ? appContext.Call<AndroidJavaObject>("getSystemService", "wifi") : null)
+                {
+                    if (wifiMgr == null) return;
+                    var lockObj = wifiMgr.Call<AndroidJavaObject>("createMulticastLock", "DynamonsLanLock");
+                    if (lockObj == null) return;
+                    lockObj.Call("setReferenceCounted", false);
+                    lockObj.Call("acquire");
+                    androidMulticastLock = lockObj;
+                }
+            }
+            catch (Exception)
+            {
+                ReleaseAndroidMulticastLock();
+            }
+#endif
+        }
+
+        private void ReleaseAndroidMulticastLock()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (androidMulticastLock == null) return;
+            try
+            {
+                if (androidMulticastLock.Call<bool>("isHeld"))
+                    androidMulticastLock.Call("release");
+            }
+            catch (Exception) { }
+            try { androidMulticastLock.Dispose(); } catch (Exception) { }
+            androidMulticastLock = null;
+#endif
+        }
+
+        internal static IPAddress PrefixLengthToMask(int prefixLength)
+        {
+            if (prefixLength <= 0) return null;
+            if (prefixLength >= 32) return new IPAddress(new byte[] { 255, 255, 255, 255 });
+            uint mask = 0xFFFFFFFFu << (32 - prefixLength);
+            return new IPAddress(new[]
+            {
+                (byte)(mask >> 24),
+                (byte)(mask >> 16),
+                (byte)(mask >> 8),
+                (byte)mask
+            });
+        }
+
+        internal static IPAddress ComputeBroadcastIp(IPAddress ip, IPAddress mask)
+        {
+            if (ip == null || ip.AddressFamily != AddressFamily.InterNetwork) return null;
+            byte[] ipBytes = ip.GetAddressBytes();
+            if (ipBytes == null || ipBytes.Length != 4) return null;
+
+            if (mask != null && mask.AddressFamily == AddressFamily.InterNetwork)
+            {
+                byte[] maskBytes = mask.GetAddressBytes();
+                if (maskBytes != null && maskBytes.Length == 4 &&
+                    !IsAllSameByte(maskBytes, 0) && !IsAllSameByte(maskBytes, 255))
+                {
+                    return new IPAddress(new[]
+                    {
+                        (byte)(ipBytes[0] | (byte)~maskBytes[0]),
+                        (byte)(ipBytes[1] | (byte)~maskBytes[1]),
+                        (byte)(ipBytes[2] | (byte)~maskBytes[2]),
+                        (byte)(ipBytes[3] | (byte)~maskBytes[3])
+                    });
+                }
+            }
+
+            return new IPAddress(new[] { ipBytes[0], ipBytes[1], ipBytes[2], (byte)255 });
+        }
+
+        internal static bool IsVirtualInterfaceName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string lower = name.ToLowerInvariant();
+            return lower.StartsWith("docker", StringComparison.Ordinal) ||
+                   lower.StartsWith("br-", StringComparison.Ordinal) ||
+                   lower.StartsWith("veth", StringComparison.Ordinal) ||
+                   lower.StartsWith("virbr", StringComparison.Ordinal) ||
+                   lower.StartsWith("vmnet", StringComparison.Ordinal) ||
+                   lower.StartsWith("vboxnet", StringComparison.Ordinal) ||
+                   lower.StartsWith("tun", StringComparison.Ordinal) ||
+                   lower.StartsWith("tap", StringComparison.Ordinal) ||
+                   lower.StartsWith("wg", StringComparison.Ordinal) ||
+                   lower.Contains("tailscale") ||
+                   lower.Contains("zerotier") ||
+                   lower.StartsWith("podman", StringComparison.Ordinal) ||
+                   lower.StartsWith("cni", StringComparison.Ordinal);
+        }
+
+        private static void EnumerateActiveIpv4(Action<IPAddress, IPAddress, bool> onUnicast)
         {
             NetworkInterface[] nics;
             try
@@ -1020,6 +1364,8 @@ namespace Dynamons
                 {
                     if (nic.OperationalStatus != OperationalStatus.Up) continue;
                     if (nic.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    if (nic.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+                    bool isVirtual = IsVirtualInterfaceName(nic.Name) || IsVirtualInterfaceName(nic.Description);
                     var props = nic.GetIPProperties();
                     if (props == null || props.UnicastAddresses == null) continue;
 
@@ -1034,7 +1380,7 @@ namespace Dynamons
 
                         IPAddress mask = null;
                         try { mask = ua.IPv4Mask; } catch (Exception) { mask = null; }
-                        onUnicast(ua.Address, mask);
+                        onUnicast(ua.Address, mask, isVirtual);
                     }
                 }
                 catch (Exception)

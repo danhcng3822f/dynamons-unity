@@ -7,6 +7,7 @@ namespace Dynamons
     {
         public const int ProtocolVersion = 1;
         public const int DiscoveryPort = 41975;
+        public const string DiscoveryMulticastIp = "239.255.41.75";
         public const int BattlePortBase = 41976;
         public const int BattlePortSpan = 10;
         public const float TurnTimeoutSec = 30f;
