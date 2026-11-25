@@ -1188,6 +1188,7 @@ namespace Dynamons
                             }
                         }
                     }
+                    catch (Exception) { }
                     try
                     {
                         using (var netIfCls = new AndroidJavaClass("java.net.NetworkInterface"))
