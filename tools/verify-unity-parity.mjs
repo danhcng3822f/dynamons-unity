@@ -372,6 +372,10 @@ function checkFontDesignRulesAndDtoConstraints() {
         /boundPort\s*=\s*0\s*;/.test(closeDisconnectBody),
         'CloseSocketsForDisconnect() must reset isConnected, isHost, and boundPort',
       );
+      for (const pubHelper of ['PrefixLengthToMask', 'ComputeBroadcastIp', 'IsVirtualInterfaceName']) {
+        assert.ok(new RegExp(`public\\s+static\\s+\\S+\\s+${pubHelper}\\s*\\(`).test(txt),
+          `LanTransport.cs ${pubHelper}() must be public static so Assembly-CSharp-Editor DynamonsChecks can invoke it`);
+      }
       for (const expected of [
         'LanConst.DiscoveryMulticastIp',
         'JoinMulticastGroup',

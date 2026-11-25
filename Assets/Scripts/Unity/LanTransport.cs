@@ -1285,7 +1285,7 @@ namespace Dynamons
 #endif
         }
 
-        internal static IPAddress PrefixLengthToMask(int prefixLength)
+        public static IPAddress PrefixLengthToMask(int prefixLength)
         {
             if (prefixLength <= 0) return null;
             if (prefixLength >= 32) return new IPAddress(new byte[] { 255, 255, 255, 255 });
@@ -1299,7 +1299,7 @@ namespace Dynamons
             });
         }
 
-        internal static IPAddress ComputeBroadcastIp(IPAddress ip, IPAddress mask)
+        public static IPAddress ComputeBroadcastIp(IPAddress ip, IPAddress mask)
         {
             if (ip == null || ip.AddressFamily != AddressFamily.InterNetwork) return null;
             byte[] ipBytes = ip.GetAddressBytes();
@@ -1324,7 +1324,7 @@ namespace Dynamons
             return new IPAddress(new[] { ipBytes[0], ipBytes[1], ipBytes[2], (byte)255 });
         }
 
-        internal static bool IsVirtualInterfaceName(string name)
+        public static bool IsVirtualInterfaceName(string name)
         {
             if (string.IsNullOrEmpty(name)) return false;
             string lower = name.ToLowerInvariant();
