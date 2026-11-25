@@ -348,6 +348,27 @@ function checkFontDesignRulesAndDtoConstraints() {
       }
       assert.ok(/\bvoid\s+OpenItemsOverlay\s*\([^)]*IReadOnlyList<LanItemSlotDto>\s+pvpPouch\b/.test(txt),
         'BattleView.cs OpenItemsOverlay must accept optional IReadOnlyList<LanItemSlotDto> pvpPouch');
+      const onNetMsgBody = extractBraceBlock(txt, /void\s+OnPvpNetMessage\s*\(\s*LanNetMessage\s+[^)]+\)/);
+      assert.ok(onNetMsgBody !== null, 'BattleView.cs must define OnPvpNetMessage(LanNetMessage)');
+      const disconnectedCaseBody = extractBraceBlock(onNetMsgBody, /case\s+"disconnected"\s*:/);
+      assert.ok(disconnectedCaseBody !== null, 'OnPvpNetMessage() must handle case "disconnected": { ... }');
+      const hasHelperGuard = /HasTerminalPvpResult\s*\(\s*\)/.test(disconnectedCaseBody);
+      const hasInlineGuard =
+        /pvpCurrentResult[^;]*\.phase\s*==\s*"ended"/.test(disconnectedCaseBody) &&
+        /pvpPendingQueue[\s\S]*\.phase\s*==\s*"ended"/.test(disconnectedCaseBody);
+      assert.ok(
+        hasHelperGuard || hasInlineGuard,
+        'OnPvpNetMessage() case "disconnected" must guard against an already-received terminal result in pvpCurrentResult or pvpPendingQueue before awarding disconnect victory',
+      );
+      if (hasHelperGuard) {
+        const hasTermBody = extractBraceBlock(txt, /bool\s+HasTerminalPvpResult\s*\(\s*\)/);
+        assert.ok(
+          hasTermBody !== null &&
+          /pvpCurrentResult[^;]*\.phase\s*==\s*"ended"/.test(hasTermBody) &&
+          /pvpPendingQueue[\s\S]*\.phase\s*==\s*"ended"/.test(hasTermBody),
+          'HasTerminalPvpResult() must inspect both pvpCurrentResult.phase == "ended" and pvpPendingQueue for phase == "ended"',
+        );
+      }
     }
     if (rel.endsWith('CollectionView.cs')) {
       assert.ok(/\bvoid\s+ShowPvpResult\s*\(\s*string\s+[^)]+\)/.test(txt),

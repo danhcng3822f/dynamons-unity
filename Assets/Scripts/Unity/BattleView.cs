@@ -263,6 +263,14 @@ namespace Dynamons
             return pvpPhase == "turn" && pvpCurrentTurnSide == pvpLocalSide;
         }
 
+        private bool HasTerminalPvpResult()
+        {
+            if (pvpCurrentResult != null && pvpCurrentResult.phase == "ended") return true;
+            foreach (var queued in pvpPendingQueue)
+                if (queued != null && queued.phase == "ended") return true;
+            return false;
+        }
+
         /// <summary>Routes incoming LAN transport packets during PvP combat and post-match result screens.</summary>
         internal void OnPvpNetMessage(LanNetMessage msg)
         {
@@ -273,6 +281,8 @@ namespace Dynamons
                 {
                     string reason = SanitizeStatusText(msg.Reason, "OPPONENT DISCONNECTED");
                     pvpResultStatusNote = reason;
+                    pvpRemoteRematchRequested = false;
+                    lobbyAwaitingRematch = false;
                     if (pvpResultActive)
                     {
                         RenderPvpResultView();
@@ -280,6 +290,11 @@ namespace Dynamons
                     }
                     if (pvpActive && pvpPhase != "ended")
                     {
+                        if (HasTerminalPvpResult())
+                        {
+                            pvpTurnTimerOpen = false;
+                            return;
+                        }
                         pvpActive = false;
                         inPvpBattle = false;
                         battleWaiting = false;
