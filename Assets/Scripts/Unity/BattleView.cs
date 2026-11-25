@@ -7,20 +7,32 @@ namespace Dynamons
 {
     internal sealed class CombatantView
     {
-        public string Id, MonId, Status;
+        public string Id, MonId, Kind, Status;
         public int Level, Hp, MaxHp, Shield, VoidStacks, PowerStacks, Charges, AtkMod, DefMod, AimMod;
         public bool Rage, Mega;
         public Passive Passive;
         public MoveData[] Moves;
+        public readonly Dictionary<string, int> Cooldowns = new Dictionary<string, int>();
 
-        public static CombatantView From(Combatant c) => new CombatantView
+        public bool Ready(MoveData move) => move != null && (!Cooldowns.TryGetValue(move.id, out int turns) || turns == 0);
+
+        public static CombatantView From(Combatant c)
         {
-            Id = c.Id, MonId = c.MonId, Level = c.Level, Hp = c.Hp, MaxHp = c.MaxHp,
-            Status = c.Status, Rage = c.Rage, Mega = c.Mega, Shield = c.Shield,
-            VoidStacks = c.VoidStacks, PowerStacks = c.PowerStacks, Charges = c.Charges,
-            AtkMod = c.Mods.atk, DefMod = c.Mods.def, AimMod = c.Mods.aim,
-            Passive = GameData.HasPassive(c.Passive) ? c.Passive : null, Moves = c.Moves,
-        };
+            var view = new CombatantView
+            {
+                Id = c.Id, MonId = c.MonId, Kind = c.Kind, Level = c.Level, Hp = c.Hp, MaxHp = c.MaxHp,
+                Status = c.Status, Rage = c.Rage, Mega = c.Mega, Shield = c.Shield,
+                VoidStacks = c.VoidStacks, PowerStacks = c.PowerStacks, Charges = c.Charges,
+                AtkMod = c.Mods.atk, DefMod = c.Mods.def, AimMod = c.Mods.aim,
+                Passive = GameData.HasPassive(c.Passive) ? c.Passive : null, Moves = c.Moves,
+            };
+            if (c.Cooldowns != null)
+            {
+                foreach (var kv in c.Cooldowns)
+                    if (kv.Value > 0) view.Cooldowns[kv.Key] = kv.Value;
+            }
+            return view;
+        }
     }
 
     public sealed partial class GameRoot
@@ -35,6 +47,17 @@ namespace Dynamons
         private bool battleActive, battleMoreOpen, battleForcedSwap, battleWaiting, battleEventStarted;
         private Reward[] pendingBattleLoot = Array.Empty<Reward>();
         private bool pendingBattleSaved = true;
+
+        private bool pvpActive, pvpHostAnimDone, pvpClientAnimDone, pvpTurnTimerOpen, pvpSubmittedCurrentSeq, pvpForfeitSent;
+        private string pvpLocalSide = string.Empty, pvpCurrentTurnSide = string.Empty, pvpPhase = "turn";
+        private string pvpForcedSide = string.Empty, pvpOutcomeSide = string.Empty, pvpPeerName = "RIVAL";
+        private int pvpSeq, pvpLastReceivedSeq = -1, pvpClientAnimDoneSeq = -1, pvpPendingTurnOpenSeq = -1;
+        private int pvpResolvedTurns, pvpLastBannerSecond = -1;
+        private float pvpTurnTimer = LanConst.TurnTimeoutSec, pvpAnimGraceTimer = LanConst.AnimGraceSec, pvpClientWaitHostTimer;
+        private LanItemSlotDto[] pvpMyPouch = Array.Empty<LanItemSlotDto>();
+        private LanTurnResultDto pvpCurrentResult;
+        private readonly Queue<LanTurnResultDto> pvpPendingQueue = new Queue<LanTurnResultDto>();
+        private RectTransform pvpBannerLayer;
 
         private List<CombatantView> viewPlayer = new List<CombatantView>();
         private List<CombatantView> viewEnemy = new List<CombatantView>();
@@ -65,6 +88,16 @@ namespace Dynamons
         private void ResetBattleState()
         {
             battleActive = false;
+            pvpActive = false;
+            pvpHostAnimDone = false;
+            pvpClientAnimDone = false;
+            pvpTurnTimerOpen = false;
+            pvpSubmittedCurrentSeq = false;
+            pvpForfeitSent = false;
+            pvpCurrentResult = null;
+            pvpPendingQueue.Clear();
+            pvpBannerLayer = null;
+            pvpLastBannerSecond = -1;
             battleWaiting = false;
             battleEventStarted = false;
             battleMoreOpen = false;
@@ -90,6 +123,607 @@ namespace Dynamons
             rainbowBorderVec = null;
         }
 
+        private static MonHudView ToMonHudView(CombatantView mon) => new MonHudView
+        {
+            MonId = mon.MonId, Level = mon.Level, Hp = mon.Hp, MaxHp = mon.MaxHp, Status = mon.Status, Rage = mon.Rage,
+        };
+
+        private static LanItemSlotDto[] ClonePouch(LanItemSlotDto[] source)
+        {
+            if (source == null || source.Length == 0) return Array.Empty<LanItemSlotDto>();
+            var copy = new LanItemSlotDto[source.Length];
+            for (int i = 0; i < source.Length; i++)
+            {
+                var slot = source[i];
+                copy[i] = slot == null ? new LanItemSlotDto() : new LanItemSlotDto { id = slot.id, count = slot.count };
+            }
+            return copy;
+        }
+
+        private List<CombatantView> BuildPvpViewTeam(LanPvpMonDto[] dtos)
+        {
+            var list = new List<CombatantView>();
+            if (dtos == null) return list;
+            for (int i = 0; i < dtos.Length; i++)
+            {
+                var dto = dtos[i];
+                if (dto == null || string.IsNullOrEmpty(dto.monId)) continue;
+                var monData = data.Mon(dto.monId);
+                MoveData[] moves = null;
+                if (dto.moveIds != null && dto.moveIds.Length > 0)
+                {
+                    moves = dto.moveIds.Select(id => data.Move(id)).Where(m => m != null).ToArray();
+                }
+                if (moves == null || moves.Length == 0)
+                    moves = data.MovesAt(dto.monId, Math.Max(1, dto.level));
+                list.Add(new CombatantView
+                {
+                    Id = dto.id,
+                    MonId = dto.monId,
+                    Kind = !string.IsNullOrEmpty(dto.kind) ? dto.kind : monData?.kind,
+                    Level = dto.level,
+                    Hp = dto.hp,
+                    MaxHp = dto.maxHp > 0 ? dto.maxHp : data.battleData.maxHP,
+                    Shield = dto.shield,
+                    Passive = GameData.HasPassive(monData?.passive) ? monData.passive : null,
+                    Moves = moves,
+                });
+            }
+            return list;
+        }
+
+        private void CreateBattleSceneLayers(string bgName)
+        {
+            ui.ArtFit(page, "session/bgs/" + (string.IsNullOrEmpty(bgName) ? "woods" : bgName), 0f, 0f, GameUi.Width, GameUi.Height);
+            fxBgVec = VectorCanvas.Create("FxBgVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            arenaLayer = GameUi.Box("ArenaSprites", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            arenaAuraVec = VectorCanvas.Create("ArenaAuraVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            fxSpritesLayer = GameUi.Box("FxSprites", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            fxFgVec = VectorCanvas.Create("FxFgVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            hpHudLayer = GameUi.Box("BattleHpHud", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            veilLayer = GameUi.Box("BattleVeil", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            topHudLayer = GameUi.Box("BattleTopHud", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            trayBgLayer = GameUi.Box("BattleTrayBg", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            controlsLayer = GameUi.Box("BattleControls", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            rainbowBorderVec = VectorCanvas.Create("BattleRainbowVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            itemsModalLayer = GameUi.Box("BattleItemsModal", page, 0f, 0f, GameUi.Width, GameUi.Height);
+        }
+
+        /// <summary>Starts a perspective-mirrored LAN PvP battle on Host or Client.</summary>
+        internal void BeginPvpBattle(LanStartMatchDto startMatch, bool isHost)
+        {
+            if (startMatch == null || startMatch.hostTeam == null || startMatch.clientTeam == null) return;
+            pvpRemoteHello = remoteHello ?? pvpRemoteHello;
+            CloseLanLobbyOverlayOnly();
+            BeginPage(null);
+
+            battle = null;
+            battleActive = false;
+            inPvpBattle = true;
+            pvpActive = true;
+            pvpIsHost = isHost;
+            pvpStartMatch = startMatch;
+            lobbyRuleMode = startMatch.ruleMode == "real" ? "real" : "fair20";
+            lobbyItemsAllowed = startMatch.itemsAllowed;
+            pvpLocalSide = isHost ? "host" : "client";
+            pvpPeerName = SanitizeDisplayName(isHost ? startMatch.clientName : startMatch.hostName, isHost ? "RIVAL" : "HOST");
+            pvpCurrentTurnSide = startMatch.startingSide == "client" ? "client" : "host";
+            pvpPhase = "turn";
+            pvpForcedSide = string.Empty;
+            pvpOutcomeSide = string.Empty;
+            pvpSeq = 0;
+            pvpLastReceivedSeq = -1;
+            pvpClientAnimDoneSeq = -1;
+            pvpPendingTurnOpenSeq = -1;
+            pvpResolvedTurns = 0;
+            pvpSubmittedCurrentSeq = false;
+            pvpForfeitSent = false;
+            pvpRemoteRematchRequested = false;
+            lobbyAwaitingRematch = false;
+            pvpResultShown = false;
+            pvpResultStatusNote = string.Empty;
+            pvpHostAnimDone = true;
+            pvpClientAnimDone = true;
+            pvpTurnTimer = LanConst.TurnTimeoutSec;
+            pvpTurnTimerOpen = true;
+            pvpAnimGraceTimer = LanConst.AnimGraceSec;
+            pvpClientWaitHostTimer = 0f;
+            pvpCurrentResult = null;
+            pvpPendingQueue.Clear();
+
+            battleTimeMs = 0f;
+            battleLog = string.Empty;
+            battleLogTimer = 0f;
+            hpTrail.Clear();
+            battleXpEarned.Clear();
+
+            viewPlayer = BuildPvpViewTeam(isHost ? startMatch.hostTeam : startMatch.clientTeam);
+            viewEnemy = BuildPvpViewTeam(isHost ? startMatch.clientTeam : startMatch.hostTeam);
+            viewActivePlayer = 0;
+            viewActiveEnemy = 0;
+            foreach (var mon in viewPlayer.Concat(viewEnemy))
+                hpTrail[mon.Id] = mon.MaxHp > 0 ? Mathf.Clamp01(mon.Hp / (float)mon.MaxHp) : 0f;
+
+            pvpMyPouch = startMatch.itemsAllowed
+                ? ClonePouch(isHost ? startMatch.hostItems : startMatch.clientItems)
+                : Array.Empty<LanItemSlotDto>();
+
+            ui.Sound("music_battle_start", save);
+            Track("music_arena_loop");
+
+            CreateBattleSceneLayers("arena");
+            RebuildBattleControls();
+            RenderDynamicBattleFrame();
+        }
+
+        private bool IsMyPvpInputTurn()
+        {
+            if (!pvpActive || pvpPhase == "ended") return false;
+            if (pvpPhase == "forced_switch") return pvpForcedSide == pvpLocalSide;
+            return pvpPhase == "turn" && pvpCurrentTurnSide == pvpLocalSide;
+        }
+
+        /// <summary>Routes incoming LAN transport packets during PvP combat and post-match result screens.</summary>
+        internal void OnPvpNetMessage(LanNetMessage msg)
+        {
+            if (msg == null || string.IsNullOrEmpty(msg.Type)) return;
+            switch (msg.Type)
+            {
+                case "disconnected":
+                {
+                    string reason = SanitizeStatusText(msg.Reason, "OPPONENT DISCONNECTED");
+                    pvpResultStatusNote = reason;
+                    if (pvpResultActive)
+                    {
+                        RenderPvpResultView();
+                        return;
+                    }
+                    if (pvpActive && pvpPhase != "ended")
+                    {
+                        pvpActive = false;
+                        inPvpBattle = false;
+                        battleWaiting = false;
+                        pvpTurnTimerOpen = false;
+                        pvpPendingQueue.Clear();
+                        ShowPvpResult("win");
+                    }
+                    break;
+                }
+                case "rematch":
+                {
+                    pvpRemoteRematchRequested = true;
+                    lobbyAwaitingRematch = false;
+                    if (pvpResultActive)
+                    {
+                        pvpResultStatusNote = "OPPONENT WANTS A REMATCH!";
+                        RenderPvpResultView();
+                    }
+                    break;
+                }
+                case "room_config":
+                {
+                    if (pvpIsHost) break;
+                    var cfg = LanCodec.Decode<LanRoomConfigDto>(msg.JsonPayload);
+                    if (cfg == null) break;
+                    lobbyRuleMode = cfg.ruleMode == "real" ? "real" : "fair20";
+                    lobbyItemsAllowed = cfg.itemsAllowed;
+                    break;
+                }
+                case "hello":
+                {
+                    var hello = LanCodec.Decode<LanHelloDto>(msg.JsonPayload);
+                    var valid = SanitizeRemoteRoster(hello?.mons);
+                    if (hello != null && hello.proto == LanConst.ProtocolVersion && valid.Length > 0)
+                    {
+                        hello.mons = valid;
+                        hello.playerName = SanitizeDisplayName(hello.playerName, pvpIsHost ? "RIVAL" : "HOST");
+                        pvpRemoteHello = hello;
+                    }
+                    break;
+                }
+                case "action":
+                {
+                    if (!pvpIsHost || !pvpActive || pvpRules == null) break;
+                    var cmd = LanCodec.Decode<LanActionCmdDto>(msg.JsonPayload);
+                    if (cmd == null) break;
+                    LanTurnResultDto res = cmd.actionType == "forfeit"
+                        ? pvpRules.Forfeit("client")
+                        : pvpRules.SubmitAction("client", cmd);
+                    if (res != null)
+                    {
+                        lanTransport?.Send("result", res);
+                        HandleIncomingPvpResult(res);
+                    }
+                    break;
+                }
+                case "result":
+                {
+                    if (pvpIsHost || !pvpActive) break;
+                    var res = LanCodec.Decode<LanTurnResultDto>(msg.JsonPayload);
+                    HandleIncomingPvpResult(res);
+                    break;
+                }
+                case "anim_done":
+                {
+                    if (!pvpIsHost || !pvpActive) break;
+                    var done = LanCodec.Decode<LanAnimDoneDto>(msg.JsonPayload);
+                    if (done != null && done.seq > pvpClientAnimDoneSeq)
+                    {
+                        pvpClientAnimDoneSeq = done.seq;
+                        if (pvpCurrentResult != null && done.seq >= pvpCurrentResult.seq)
+                            pvpClientAnimDone = true;
+                    }
+                    break;
+                }
+                case "turn_open":
+                {
+                    if (pvpIsHost || !pvpActive) break;
+                    var openDto = LanCodec.Decode<LanAnimDoneDto>(msg.JsonPayload);
+                    if (openDto == null) break;
+                    if (openDto.seq > pvpPendingTurnOpenSeq) pvpPendingTurnOpenSeq = openDto.seq;
+                    if (!battleWaiting && pvpPhase != "ended" && openDto.seq >= pvpSeq && !pvpTurnTimerOpen)
+                    {
+                        pvpTurnTimerOpen = true;
+                        pvpTurnTimer = LanConst.TurnTimeoutSec;
+                        RefreshPvpTurnBanner();
+                    }
+                    break;
+                }
+            }
+        }
+
+        private void HandleIncomingPvpResult(LanTurnResultDto res)
+        {
+            if (!pvpActive || res == null || res.seq <= pvpLastReceivedSeq) return;
+            pvpLastReceivedSeq = res.seq;
+            pvpPendingQueue.Enqueue(res);
+            if (!battleWaiting) StartPvpResultPlayback(pvpPendingQueue.Dequeue());
+        }
+
+        private void StartPvpResultPlayback(LanTurnResultDto res)
+        {
+            pvpCurrentResult = res;
+            if (pvpIsHost && pvpRules != null)
+            {
+                pvpResolvedTurns = pvpRules.ResolvedTurns;
+            }
+            else
+            {
+                bool isEscape = res.events != null && res.events.Any(e => e != null && e.type == "escape");
+                bool isMegaOnly = res.events != null && res.events.Any(e => e != null && e.type == "mega") &&
+                    !res.events.Any(e => e != null && (e.type == "ability" || e.type == "sleep" || e.type == "switch"));
+                if (pvpPhase == "turn" && !isEscape && !isMegaOnly) pvpResolvedTurns++;
+            }
+
+            battleMoreOpen = false;
+            battleForcedSwap = false;
+            passiveInspectSide = null;
+            if (itemsModalLayer != null) GameUi.Clear(itemsModalLayer);
+
+            battleEvents = (res.events ?? Array.Empty<LanEventDto>())
+                .Select(ev => LanCodec.EventFromDto(ev, pvpLocalSide))
+                .Where(ev => ev != null)
+                .ToArray();
+            battleEventIndex = 0;
+            battleEventTimer = 0f;
+            battleTurnPauseMs = 0f;
+            enemyTurnPauseDone = false;
+            battleEventStarted = false;
+            battleWaiting = true;
+
+            pvpHostAnimDone = false;
+            pvpClientAnimDone = pvpClientAnimDoneSeq >= res.seq;
+            pvpAnimGraceTimer = LanConst.AnimGraceSec;
+            pvpTurnTimerOpen = false;
+            pvpTurnTimer = LanConst.TurnTimeoutSec;
+            pvpClientWaitHostTimer = LanConst.AnimGraceSec;
+            RebuildBattleControls();
+        }
+
+        private static void ReconcilePvpTeamViews(List<CombatantView> views, LanCombatantSnapshotDto[] snaps)
+        {
+            if (views == null || snaps == null) return;
+            int count = Math.Min(views.Count, snaps.Length);
+            for (int i = 0; i < count; i++)
+            {
+                var view = views[i];
+                var snap = snaps[i];
+                if (view == null || snap == null) continue;
+                view.Level = snap.level;
+                view.Hp = snap.hp;
+                view.MaxHp = snap.maxHp > 0 ? snap.maxHp : view.MaxHp;
+                view.Status = string.IsNullOrEmpty(snap.status) ? null : snap.status;
+                view.Rage = snap.rage;
+                view.Mega = snap.mega;
+                view.Shield = snap.shield;
+                view.VoidStacks = snap.voidStacks;
+                view.PowerStacks = snap.powerStacks;
+                view.Charges = snap.charges;
+                view.AtkMod = snap.atkMod;
+                view.DefMod = snap.defMod;
+                view.AimMod = snap.aimMod;
+                view.Cooldowns.Clear();
+                if (snap.cooldownIds != null && snap.cooldownTurns != null)
+                {
+                    int cdCount = Math.Min(snap.cooldownIds.Length, snap.cooldownTurns.Length);
+                    for (int c = 0; c < cdCount; c++)
+                    {
+                        string cdId = snap.cooldownIds[c];
+                        int cdTurns = snap.cooldownTurns[c];
+                        if (!string.IsNullOrEmpty(cdId) && cdTurns > 0) view.Cooldowns[cdId] = cdTurns;
+                    }
+                }
+            }
+        }
+
+        private void ApplyPvpSnapshot(LanTurnResultDto res)
+        {
+            if (res == null) return;
+            ReconcilePvpTeamViews(viewPlayer, pvpIsHost ? res.hostTeam : res.clientTeam);
+            ReconcilePvpTeamViews(viewEnemy, pvpIsHost ? res.clientTeam : res.hostTeam);
+            if (viewPlayer.Count > 0)
+                viewActivePlayer = GameData.Clamp(pvpIsHost ? res.activeHostSlot : res.activeClientSlot, 0, viewPlayer.Count - 1);
+            if (viewEnemy.Count > 0)
+                viewActiveEnemy = GameData.Clamp(pvpIsHost ? res.activeClientSlot : res.activeHostSlot, 0, viewEnemy.Count - 1);
+
+            if (pvpStartMatch != null && pvpStartMatch.itemsAllowed)
+                pvpMyPouch = ClonePouch(pvpIsHost ? res.hostItems : res.clientItems);
+
+            pvpSeq = res.seq + 1;
+            pvpSubmittedCurrentSeq = false;
+            pvpPhase = string.IsNullOrEmpty(res.phase) ? "turn" : res.phase;
+            pvpCurrentTurnSide = res.nextTurnSide ?? string.Empty;
+            pvpForcedSide = res.forcedSwitchSide ?? string.Empty;
+            pvpOutcomeSide = res.outcome ?? string.Empty;
+        }
+
+        private void FinishPvpEventPlayback()
+        {
+            var finished = pvpCurrentResult;
+            battleWaiting = false;
+            battleEventStarted = false;
+            battleTurnPauseMs = 0f;
+            enemyTurnPauseDone = false;
+            battleEvents = Array.Empty<BattleEvent>();
+
+            ApplyPvpSnapshot(finished);
+
+            if (finished != null)
+            {
+                if (!pvpIsHost)
+                {
+                    lanTransport?.Send("anim_done", new LanAnimDoneDto { seq = finished.seq });
+                }
+                else
+                {
+                    pvpHostAnimDone = true;
+                    pvpClientAnimDone = pvpClientAnimDoneSeq >= finished.seq;
+                    pvpAnimGraceTimer = LanConst.AnimGraceSec;
+                }
+            }
+
+            if (pvpPendingQueue.Count > 0)
+            {
+                StartPvpResultPlayback(pvpPendingQueue.Dequeue());
+                return;
+            }
+
+            if (pvpPhase == "ended")
+            {
+                pvpActive = false;
+                inPvpBattle = false;
+                pvpTurnTimerOpen = false;
+                ShowPvpResult(pvpOutcomeSide == pvpLocalSide ? "win" : "loss");
+                return;
+            }
+
+            if (pvpIsHost)
+            {
+                if (pvpHostAnimDone && pvpClientAnimDone)
+                {
+                    pvpTurnTimerOpen = true;
+                    pvpTurnTimer = LanConst.TurnTimeoutSec;
+                    lanTransport?.Send("turn_open", new LanAnimDoneDto { seq = pvpSeq });
+                }
+                else
+                {
+                    pvpTurnTimerOpen = false;
+                    pvpTurnTimer = LanConst.TurnTimeoutSec;
+                }
+            }
+            else
+            {
+                pvpTurnTimerOpen = pvpPendingTurnOpenSeq >= pvpSeq;
+                pvpTurnTimer = LanConst.TurnTimeoutSec;
+                pvpClientWaitHostTimer = LanConst.AnimGraceSec;
+            }
+
+            battleForcedSwap = pvpPhase == "forced_switch" && pvpForcedSide == pvpLocalSide;
+            battleMoreOpen = battleForcedSwap;
+            RebuildBattleControls();
+        }
+
+        private void UpdatePvpTurnClock()
+        {
+            if (!pvpActive || battleWaiting || pvpPhase == "ended") return;
+            if (pvpIsHost)
+            {
+                if (!pvpTurnTimerOpen)
+                {
+                    if (pvpHostAnimDone && !pvpClientAnimDone)
+                        pvpAnimGraceTimer = Mathf.Max(0f, pvpAnimGraceTimer - Time.unscaledDeltaTime);
+                    if (pvpHostAnimDone && (pvpClientAnimDone || pvpAnimGraceTimer <= 0f))
+                    {
+                        pvpTurnTimerOpen = true;
+                        pvpTurnTimer = LanConst.TurnTimeoutSec;
+                        lanTransport?.Send("turn_open", new LanAnimDoneDto { seq = pvpSeq });
+                        RefreshPvpTurnBanner();
+                    }
+                    return;
+                }
+
+                pvpTurnTimer = Mathf.Max(0f, pvpTurnTimer - Time.unscaledDeltaTime);
+                if (pvpTurnTimer <= 0f)
+                {
+                    pvpTurnTimerOpen = false;
+                    var timeoutRes = pvpRules?.ResolveTimeoutFallback();
+                    if (timeoutRes != null)
+                    {
+                        lanTransport?.Send("result", timeoutRes);
+                        HandleIncomingPvpResult(timeoutRes);
+                    }
+                    return;
+                }
+            }
+            else
+            {
+                if (!pvpTurnTimerOpen)
+                {
+                    if (pvpPendingTurnOpenSeq >= pvpSeq)
+                    {
+                        pvpTurnTimerOpen = true;
+                        pvpTurnTimer = LanConst.TurnTimeoutSec;
+                        RefreshPvpTurnBanner();
+                        return;
+                    }
+                    pvpClientWaitHostTimer -= Time.unscaledDeltaTime;
+                    if (pvpClientWaitHostTimer <= 0f)
+                    {
+                        pvpTurnTimerOpen = true;
+                        pvpTurnTimer = LanConst.TurnTimeoutSec;
+                        RefreshPvpTurnBanner();
+                    }
+                    return;
+                }
+                pvpTurnTimer = Mathf.Max(0f, pvpTurnTimer - Time.unscaledDeltaTime);
+            }
+
+            int sec = Mathf.CeilToInt(Mathf.Max(0f, pvpTurnTimer));
+            if (sec != pvpLastBannerSecond) RefreshPvpTurnBanner();
+        }
+
+        private void SubmitBattleAction(BattleAction action)
+        {
+            if (pvpActive) PvpClick(action);
+            else BattleClick(action);
+        }
+
+        private void PvpClick(BattleAction action)
+        {
+            if (!pvpActive || pvpPhase == "ended") return;
+
+            if (action.Type == "escape")
+            {
+                if (pvpForfeitSent) return;
+                pvpForfeitSent = true;
+                battleMoreOpen = false;
+                battleForcedSwap = false;
+                passiveInspectSide = null;
+                if (itemsModalLayer != null) GameUi.Clear(itemsModalLayer);
+
+                if (pvpIsHost)
+                {
+                    var ffRes = pvpRules?.Forfeit("host");
+                    if (ffRes != null)
+                    {
+                        lanTransport?.Send("result", ffRes);
+                        HandleIncomingPvpResult(ffRes);
+                    }
+                }
+                else
+                {
+                    lanTransport?.Send("action", new LanActionCmdDto { seq = pvpSeq, actionType = "forfeit" });
+                    RebuildBattleControls();
+                }
+                return;
+            }
+
+            if (battleWaiting || !IsMyPvpInputTurn() || pvpSubmittedCurrentSeq) return;
+            if (action.Type == "catch") return;
+            if (pvpPhase == "forced_switch" && action.Type != "switch") return;
+
+            var actor = viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null;
+            if (action.Type == "switch")
+            {
+                if (action.Index < 0 || action.Index >= viewPlayer.Count || action.Index == viewActivePlayer || viewPlayer[action.Index].Hp <= 0)
+                    return;
+            }
+            else if (action.Type == "mega")
+            {
+                if (actor == null || actor.Hp <= 0 || actor.Status == "sleep" || viewPlayer.Any(m => m.Mega)) return;
+            }
+            else if (action.Type == "ability")
+            {
+                var move = actor?.Moves?.FirstOrDefault(m => m.id == action.Id);
+                if (actor == null || actor.Hp <= 0 || move == null || !actor.Ready(move)) return;
+            }
+            else if (action.Type == "item")
+            {
+                if (pvpStartMatch == null || !pvpStartMatch.itemsAllowed || string.IsNullOrEmpty(action.Id)) return;
+                bool blockCans = actor != null && actor.Status == "sleep";
+                if (!IsItemUsable(action.Id, true, false, blockCans, pvpMyPouch)) return;
+            }
+            else
+            {
+                return;
+            }
+
+            var cmd = new LanActionCmdDto
+            {
+                seq = pvpSeq,
+                actionType = action.Type,
+                id = action.Id ?? string.Empty,
+                index = action.Index
+            };
+
+            battleMoreOpen = false;
+            battleForcedSwap = false;
+            passiveInspectSide = null;
+            if (itemsModalLayer != null) GameUi.Clear(itemsModalLayer);
+
+            if (pvpIsHost)
+            {
+                var res = pvpRules?.SubmitAction("host", cmd);
+                if (res == null) return;
+                pvpSubmittedCurrentSeq = true;
+                lanTransport?.Send("result", res);
+                HandleIncomingPvpResult(res);
+            }
+            else
+            {
+                pvpSubmittedCurrentSeq = true;
+                lanTransport?.Send("action", cmd);
+                RebuildBattleControls();
+            }
+        }
+
+        private string BuildPvpBannerText()
+        {
+            if (pvpForfeitSent) return "FORFEITING...";
+            if (pvpPhase == "forced_switch") return "OPPONENT CHOOSING...";
+            if (pvpSubmittedCurrentSeq) return "WAITING FOR HOST...";
+            if (!pvpTurnTimerOpen) return "OPPONENT TURN";
+            int secs = Mathf.CeilToInt(Mathf.Max(0f, pvpTurnTimer));
+            return $"OPPONENT TURN {secs}S";
+        }
+
+        private void RefreshPvpTurnBanner()
+        {
+            if (pvpBannerLayer == null || !pvpActive) return;
+            GameUi.Clear(pvpBannerLayer);
+            int secs = Mathf.CeilToInt(Mathf.Max(0f, pvpTurnTimer));
+            pvpLastBannerSecond = secs;
+            if (battleWaiting || (IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq)) return;
+
+            bool urgent = pvpTurnTimerOpen && secs <= 5;
+            var vec = VectorCanvas.Create("PvpTurnBannerVec", pvpBannerLayer, 68f, GameUi.Height - 54f, 242f, 38f);
+            vec.FillRoundRect(0f, 0f, 242f, 38f, 9f, GameUi.HexColor(urgent ? "#401220" : "#1f1636", 0.94f));
+            vec.StrokeRoundRect(1f, 1f, 240f, 36f, 8f, GameUi.HexColor(urgent ? "#ff6b6b" : "#7be0ff", 0.95f), 1.5f);
+            vec.Commit();
+            fonts.Draw(pvpBannerLayer, "white_stroked_small", BuildPvpBannerText(), 189f, GameUi.Height - 40f, 10.5f, "center",
+                urgent ? GameUi.HexColor("#ff9aa3") : Color.white, 224f);
+        }
+
         private void BeginBattle(Encounter encounter)
         {
             var startDialog = encounter.Dialogs?.dialog_start;
@@ -103,6 +737,7 @@ namespace Dynamons
             { flow.CancelEntry(battle); battle = null; ShowMap(); Note("Could not save the ticket. Please try again."); return; }
 
             BeginPage(null);
+            inPvpBattle = false;
             battleActive = true;
             battleTimeMs = 0f;
             battleLog = string.Empty;
@@ -115,19 +750,7 @@ namespace Dynamons
             ui.Sound(intro, save);
             Track(encounter.Kind == "arena" ? "music_arena_loop" : "music_battle_loop");
 
-            ui.ArtFit(page, "session/bgs/" + (string.IsNullOrEmpty(encounter.Background) ? "woods" : encounter.Background), 0f, 0f, GameUi.Width, GameUi.Height);
-            fxBgVec = VectorCanvas.Create("FxBgVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            arenaLayer = GameUi.Box("ArenaSprites", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            arenaAuraVec = VectorCanvas.Create("ArenaAuraVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            fxSpritesLayer = GameUi.Box("FxSprites", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            fxFgVec = VectorCanvas.Create("FxFgVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            hpHudLayer = GameUi.Box("BattleHpHud", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            veilLayer = GameUi.Box("BattleVeil", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            topHudLayer = GameUi.Box("BattleTopHud", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            trayBgLayer = GameUi.Box("BattleTrayBg", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            controlsLayer = GameUi.Box("BattleControls", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            rainbowBorderVec = VectorCanvas.Create("BattleRainbowVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
-            itemsModalLayer = GameUi.Box("BattleItemsModal", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            CreateBattleSceneLayers(encounter.Background);
 
             RebuildBattleControls();
             RenderDynamicBattleFrame();
@@ -145,7 +768,7 @@ namespace Dynamons
 
         private void UpdateBattleLoop()
         {
-            if (!battleActive || battle == null) return;
+            if ((!battleActive || battle == null) && !pvpActive) return;
             float scaledDtMs = Time.unscaledDeltaTime * 1000f * Mathf.Clamp(save.Speed, 1, 3);
             battleTimeMs += scaledDtMs;
 
@@ -175,6 +798,12 @@ namespace Dynamons
                 {
                     if (battleEventIndex >= battleEvents.Length)
                     {
+                        if (pvpActive)
+                        {
+                            FinishPvpEventPlayback();
+                            if (!pvpActive) return;
+                            break;
+                        }
                         battleWaiting = false;
                         battleEventStarted = false;
                         battleTurnPauseMs = 0f;
@@ -214,6 +843,11 @@ namespace Dynamons
                     battleEventStarted = false;
                     HandleBattleEvent(ev);
                 }
+            }
+            else if (pvpActive)
+            {
+                UpdatePvpTurnClock();
+                if (!pvpActive) return;
             }
 
             RenderDynamicBattleFrame();
@@ -392,10 +1026,11 @@ namespace Dynamons
 
         private void RebuildBattleControls()
         {
-            if (controlsLayer == null || battle == null) return;
+            if (controlsLayer == null || (battle == null && !pvpActive)) return;
             GameUi.Clear(controlsLayer);
             GameUi.Clear(trayBgLayer);
             GameUi.Clear(veilLayer);
+            pvpBannerLayer = null;
             rainbowTargets.Clear();
 
             ui.HitBox(controlsLayer, 256f, 39f, 58f, 24f, () =>
@@ -407,29 +1042,43 @@ namespace Dynamons
             });
             HudWidgets.DrawMuteButton(ui, controlsLayer, save, musicTrack, () => Persist(), RebuildBattleControls);
 
-            if (battle.Outcome != null) return;
-            var actor = battle.Player;
-            bool interactive = !battleWaiting;
+            if (pvpActive ? pvpPhase == "ended" : battle.Outcome != null) return;
+
+            var actor = pvpActive
+                ? (viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null)
+                : CombatantView.From(battle.Player);
+            var foe = pvpActive
+                ? (viewActiveEnemy < viewEnemy.Count ? viewEnemy[viewActiveEnemy] : null)
+                : (battle.Enemy != null ? CombatantView.From(battle.Enemy) : null);
+            if (actor == null) return;
+
+            bool interactive = pvpActive
+                ? (!battleWaiting && IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq)
+                : !battleWaiting;
+            bool allowItems = !pvpActive || (pvpStartMatch != null && pvpStartMatch.itemsAllowed);
 
             if (battleMoreOpen || battleForcedSwap)
             {
                 GameUi.Fill(veilLayer, new Color(0f, 0f, 0f, 0.68f), 0f, 0f, GameUi.Width, GameUi.Height);
                 if (battleForcedSwap) fonts.Draw(veilLayer, "white_stroked_small", "CHOOSE NEXT DYNAMON!", GameUi.Width * 0.5f, 134f, 12f, "center");
                 int row = 0;
-                for (int i = 0; i < battle.Party.Length; i++)
+                int teamLen = pvpActive ? viewPlayer.Count : battle.Party.Length;
+                int activeIdx = pvpActive ? viewActivePlayer : battle.PlayerSlot;
+                for (int i = 0; i < teamLen; i++)
                 {
-                    if (i == battle.PlayerSlot) continue;
+                    if (i == activeIdx) continue;
                     int slotIdx = i;
-                    var mon = battle.Party[i];
+                    var hudMon = pvpActive ? ToMonHudView(viewPlayer[i]) : MonHudView.FromCombatant(battle.Party[i]);
+                    int monHp = pvpActive ? viewPlayer[i].Hp : battle.Party[i].Hp;
                     float sy = 428f - row * 74f;
-                    bool alive = mon.Hp > 0;
-                    HudWidgets.DrawMonPane(ui, fonts, data, veilLayer, MonHudView.FromCombatant(mon), "thumb", 8f, sy, alpha: alive ? 1f : 0.3f);
+                    bool alive = monHp > 0;
+                    HudWidgets.DrawMonPane(ui, fonts, data, veilLayer, hudMon, "thumb", 8f, sy, alpha: alive ? 1f : 0.3f);
                     if (alive && interactive)
                     {
                         ui.HitBox(controlsLayer, 8f, sy, 120f, 65f, () =>
                         {
                             ui.Sound("button_click", save);
-                            BattleClick(new BattleAction("switch", index: slotIdx));
+                            SubmitBattleAction(new BattleAction("switch", index: slotIdx));
                         });
                     }
                     row++;
@@ -446,12 +1095,16 @@ namespace Dynamons
                     }, interactive);
                 }
 
+                bool escapeEnabled = pvpActive ? (pvpPhase != "ended" && !pvpForfeitSent) : interactive;
                 var misc = new List<(string img, bool enabled, bool isCatch, Action act)>
                 {
-                    ("session/ui/btn_escape", interactive, false, () => BattleClick(new BattleAction("escape"))),
-                    ("map/btn_items", interactive && !battleForcedSwap, false, OpenBattleItemPicker),
+                    ("session/ui/btn_escape", escapeEnabled, false, () => SubmitBattleAction(new BattleAction("escape"))),
                 };
-                if (battle.Encounter.CanCapture)
+                if (allowItems)
+                {
+                    misc.Add(("map/btn_items", interactive && !battleForcedSwap, false, OpenBattleItemPicker));
+                }
+                if (!pvpActive && battle.Encounter.CanCapture)
                 {
                     bool canCatch = !battleForcedSwap && battle.Enemy.Hp > 0 && save.Count("discatch") > 0;
                     misc.Add((canCatch ? "session/ui/btn_catch" : "session/ui/btn_catch_off", interactive && canCatch, true, () => BattleClick(new BattleAction("catch"))));
@@ -481,14 +1134,7 @@ namespace Dynamons
                 return;
             }
 
-            bool megaReady = battle.CanMega;
-            bool megaActive = actor.Mega;
-            ui.ArtButton(controlsLayer, "session/ui/btn_mega", 9f, 442f, 52f, 52f,
-                () => BattleClick(new BattleAction("mega")), interactive && megaReady, megaActive ? 1f : (interactive && megaReady ? 1f : 0.45f));
-            if (megaActive || (megaReady && interactive))
-                rainbowTargets.Add((8f, 441f, 54f, 54f, 0f, megaActive));
-
-            if (interactive)
+            if (pvpActive ? !battleWaiting : interactive)
             {
                 var curFoe = viewActiveEnemy < viewEnemy.Count ? viewEnemy[viewActiveEnemy] : null;
                 var curPlayer = viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null;
@@ -496,6 +1142,24 @@ namespace Dynamons
                     ui.HitBox(controlsLayer, 158f, 68f, 112f, 22f, () => OpenPassiveInspect("enemy"));
                 if (GameData.HasPassive(curPlayer?.Passive))
                     ui.HitBox(controlsLayer, 214f, 419f, 101f, 20f, () => OpenPassiveInspect("player"));
+            }
+
+            bool megaReady = pvpActive
+                ? (pvpPhase == "turn" && actor.Hp > 0 && actor.Status != "sleep" && !viewPlayer.Any(m => m.Mega))
+                : battle.CanMega;
+            bool megaActive = actor.Mega;
+            ui.ArtButton(controlsLayer, "session/ui/btn_mega", 9f, 442f, 52f, 52f,
+                () => SubmitBattleAction(new BattleAction("mega")), interactive && megaReady, megaActive ? 1f : (interactive && megaReady ? 1f : 0.45f));
+            if (megaActive || (megaReady && interactive))
+                rainbowTargets.Add((8f, 441f, 54f, 54f, 0f, megaActive));
+
+            if (pvpActive && !battleWaiting && (!IsMyPvpInputTurn() || pvpSubmittedCurrentSeq))
+            {
+                ui.ArtButton(controlsLayer, "session/ui/btn_escape", 5f, GameUi.Height - 64f, 55f, 60f,
+                    () => SubmitBattleAction(new BattleAction("escape")), !pvpForfeitSent);
+                pvpBannerLayer = GameUi.Box("PvpBanner", controlsLayer, 0f, 0f, GameUi.Width, GameUi.Height);
+                RefreshPvpTurnBanner();
+                return;
             }
 
             var moves = (actor.Moves ?? Array.Empty<MoveData>()).Take(5).ToArray();
@@ -524,7 +1188,7 @@ namespace Dynamons
                 bool sporeReady = actor.Passive?.type == "charge" && move.id == actor.Passive.abilityId &&
                                   actor.Charges >= Math.Max(1, actor.Passive.threshold);
                 ui.ArtButton(controlsLayer, GameUi.Move(move.id), bx, btnY, btnSize, btnSize,
-                    () => BattleClick(new BattleAction("ability", move.id)), interactive && ready, 1f);
+                    () => SubmitBattleAction(new BattleAction("ability", move.id)), interactive && ready, 1f);
                 if (((viewP != null && viewP.Mega) || sporeReady) && ready && interactive)
                     rainbowTargets.Add((bx + 1f, btnY + 1f, btnSize - 2f, btnSize - 2f, i * 220f, false));
                 if (!ready && cd > 0)
@@ -540,12 +1204,12 @@ namespace Dynamons
                 {
                     ui.Art(controlsLayer, "session/ui/icon_off", bx, btnY, btnSize, btnSize, true, 0.45f);
                 }
-                if (battle.Enemy != null && move.power > 0 && !string.IsNullOrEmpty(move.effect) && move.effect.Contains("attack"))
+                if (foe != null && move.power > 0 && !string.IsNullOrEmpty(move.effect) && move.effect.Contains("attack"))
                 {
                     float tipAlpha = ready && interactive ? 1f : 0.6f;
-                    if (GameData.Strong(move.kind, battle.Enemy.Kind))
+                    if (GameData.Strong(move.kind, foe.Kind))
                         ui.Art(controlsLayer, "general/huds/tip_strong", bx + (btnSize - 42f) * 0.5f, btnY - 12f, 42f, 13f, true, tipAlpha);
-                    else if (GameData.Strong(battle.Enemy.Kind, move.kind))
+                    else if (GameData.Strong(foe.Kind, move.kind))
                         ui.Art(controlsLayer, "general/huds/tip_weak", bx + (btnSize - 42f) * 0.5f, btnY - 12f, 42f, 13f, true, tipAlpha);
                 }
             }
@@ -553,10 +1217,28 @@ namespace Dynamons
 
         private void OpenBattleItemPicker()
         {
+            if (pvpActive)
+            {
+                if (battleWaiting || pvpPhase == "ended" || !IsMyPvpInputTurn() || pvpSubmittedCurrentSeq) return;
+                if (pvpStartMatch == null || !pvpStartMatch.itemsAllowed) return;
+                ui.Sound("screen_open", save);
+                var actor = viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null;
+                bool blockCans = actor != null && actor.Status == "sleep";
+                OpenItemsOverlay(true, false, blockCans, id =>
+                {
+                    PvpClick(new BattleAction("item", id));
+                }, () =>
+                {
+                    battleMoreOpen = false;
+                    RebuildBattleControls();
+                }, null, pvpMyPouch);
+                return;
+            }
+
             if (battleWaiting || battle.Outcome != null) return;
             ui.Sound("screen_open", save);
-            bool blockCans = battle.Player.Status == "sleep";
-            OpenItemsOverlay(true, battle.Encounter.CanCapture, blockCans, id =>
+            bool pveBlockCans = battle.Player.Status == "sleep";
+            OpenItemsOverlay(true, battle.Encounter.CanCapture, pveBlockCans, id =>
             {
                 if (id == "discatch") BattleClick(new BattleAction("catch"));
                 else BattleClick(new BattleAction("item", id));
@@ -569,7 +1251,7 @@ namespace Dynamons
 
         private void RenderDynamicBattleFrame()
         {
-            if (arenaLayer == null || battle == null) return;
+            if (arenaLayer == null || (battle == null && !pvpActive)) return;
             GameUi.Clear(arenaLayer);
             GameUi.Clear(fxSpritesLayer);
             GameUi.Clear(hpHudLayer);
@@ -579,7 +1261,8 @@ namespace Dynamons
             fxFgVec.Clear();
             rainbowBorderVec.Clear();
 
-            bool isSumsumBoss = battle.Encounter.Kind == "boss" && battle.Encounter.Captain == "sumsum";
+            bool isSumsumBoss = battle != null && battle.Encounter.Kind == "boss" && battle.Encounter.Captain == "sumsum";
+            bool turnRingActive = pvpActive ? (IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq) : (battle != null && battle.Outcome == null);
             BattleEvent activeEv = battleWaiting && battleEventIndex < battleEvents.Length ? battleEvents[battleEventIndex] : null;
 
             foreach (var side in new[] { "enemy", "player" })
@@ -591,7 +1274,7 @@ namespace Dynamons
                 var box = PositionBox(side);
                 var (ox, oy, alpha) = MonsterOffset(side, mon, activeEv);
                 ui.Art(arenaLayer, "session/mon_shadow", box.Cx - box.W * 0.45f, box.Ground - 12f, box.W * 0.9f, (box.W * 0.9f * 60f) / 230f, true, 0.72f);
-                if (side == "player" && !battleWaiting && battle.Outcome == null && mon.Hp > 0)
+                if (side == "player" && !battleWaiting && turnRingActive && mon.Hp > 0)
                     ui.Art(arenaLayer, "session/ui/turn", box.Cx - 82.5f, box.Ground - 28f, 165f, 55f, true);
 
                 string darkPath = GameUi.Mon(mon.MonId, "front_dark");
@@ -690,7 +1373,12 @@ namespace Dynamons
                 DrawStatStageChips(hudVec, hpHudLayer, player, 89f, 444f, false);
             }
 
-            if (battle.Encounter.Kind != "wild" && !string.IsNullOrEmpty(battle.Encounter.Captain))
+            if (pvpActive)
+            {
+                int aliveEnemies = viewEnemy.Count(m => m.Hp > 0);
+                HudWidgets.DrawCaptainHud(ui, fonts, topHudLayer, pvpPeerName, viewEnemy.Count, aliveEnemies, 5f, 5f, "general/enemies/lan_npc_icon");
+            }
+            else if (battle.Encounter.Kind != "wild" && !string.IsNullOrEmpty(battle.Encounter.Captain))
             {
                 int aliveEnemies = viewEnemy.Count(m => m.Hp > 0);
                 string iconOverride = battle.Encounter.Kind == "starter_event" ? GameUi.Mon(battle.Encounter.Captain, "icon") : null;
@@ -699,6 +1387,18 @@ namespace Dynamons
             HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer, false);
             var topHudVec = VectorCanvas.Create("TopHudVec", topHudLayer, 0f, 0f, GameUi.Width, GameUi.Height);
             DrawBattleSpeedButton(topHudVec, topHudLayer);
+            if (pvpActive && pvpPhase != "ended")
+            {
+                int secs = Mathf.CeilToInt(Mathf.Max(0f, pvpTurnTimer));
+                bool urgent = !battleWaiting && pvpTurnTimerOpen && secs <= 5;
+                float pulse = urgent ? (0.55f + 0.45f * Mathf.Abs(Mathf.Sin(Time.unscaledTime * 8f))) : 1f;
+                string clockText = battleWaiting || !pvpTurnTimerOpen ? "SYNC" : $"{secs}S";
+                topHudVec.FillRoundRect(190f, 39f, 62f, 24f, 8f, GameUi.HexColor(urgent ? "#8a1828" : "#182442", 0.92f));
+                topHudVec.StrokeRect(191f, 40f, 60f, 22f,
+                    GameUi.HexColor(urgent ? "#ff6b6b" : (IsMyPvpInputTurn() ? "#ffe259" : "#7be0ff"), 0.95f * pulse), 1.5f);
+                fonts.Draw(topHudLayer, "white_stroked_small", clockText, 221f, 46f, 10f, "center",
+                    urgent ? GameUi.HexColor("#ff9aa3") : (IsMyPvpInputTurn() ? GameUi.Gold : Color.white));
+            }
             topHudVec.Commit();
             DrawFeedbacks();
 
@@ -901,9 +1601,19 @@ namespace Dynamons
             return outList;
         }
 
-        private bool IsItemUsable(string id, bool inBattle, bool allowCatch, bool blockCans)
+        private bool IsItemUsable(string id, bool inBattle, bool allowCatch, bool blockCans, IReadOnlyList<LanItemSlotDto> pvpPouch = null)
         {
-            if (string.IsNullOrEmpty(id) || save.Count(id) <= 0) return false;
+            if (string.IsNullOrEmpty(id)) return false;
+            if (pvpPouch != null)
+            {
+                int pouchCount = pvpPouch.FirstOrDefault(s => s != null && s.id == id)?.count ?? 0;
+                if (pouchCount <= 0) return false;
+                var pvpItem = data.Item(id);
+                if (pvpItem == null || !pvpItem.inBattle || id == "discatch") return false;
+                if (blockCans && id.StartsWith("can_", StringComparison.Ordinal)) return false;
+                return true;
+            }
+            if (save.Count(id) <= 0) return false;
             var item = data.Item(id);
             if (item == null) return false;
             if (inBattle)
@@ -921,7 +1631,15 @@ namespace Dynamons
 
         private void OpenPassiveInspect(string side)
         {
-            if (battleWaiting || battle == null || battle.Outcome != null || itemsModalLayer == null) return;
+            if (battleWaiting || itemsModalLayer == null) return;
+            if (pvpActive)
+            {
+                if (pvpPhase == "ended") return;
+            }
+            else if (battle == null || battle.Outcome != null)
+            {
+                return;
+            }
             var mon = side == "enemy"
                 ? (viewActiveEnemy < viewEnemy.Count ? viewEnemy[viewActiveEnemy] : null)
                 : (viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null);
@@ -999,7 +1717,7 @@ namespace Dynamons
             });
         }
 
-        private void OpenItemsOverlay(bool inBattle, bool allowCatch, bool blockCans, Action<string> onUse, Action onClose, RectTransform customHost = null)
+        private void OpenItemsOverlay(bool inBattle, bool allowCatch, bool blockCans, Action<string> onUse, Action onClose, RectTransform customHost = null, IReadOnlyList<LanItemSlotDto> pvpPouch = null)
         {
             var host = customHost ?? itemsModalLayer;
             if (host == null) return;
@@ -1009,15 +1727,15 @@ namespace Dynamons
             modalSelectedItemId = null;
             modalPickingStoneTarget = false;
             modalStoneId = null;
-            RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+            RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose, pvpPouch);
         }
 
-        private void RenderItemsModalContents(Transform host, bool inBattle, bool allowCatch, bool blockCans, Action<string> onUse, Action onClose)
+        private void RenderItemsModalContents(Transform host, bool inBattle, bool allowCatch, bool blockCans, Action<string> onUse, Action onClose, IReadOnlyList<LanItemSlotDto> pvpPouch = null)
         {
             GameUi.Clear(host);
             GameUi.Fill(host, new Color(0.02f, 0.015f, 0.06f, 0.68f), 0f, 0f, GameUi.Width, GameUi.Height, true);
 
-            if (modalPickingStoneTarget && !string.IsNullOrEmpty(modalStoneId))
+            if (pvpPouch == null && modalPickingStoneTarget && !string.IsNullOrEmpty(modalStoneId))
             {
                 GameUi.Fill(host, new Color(0f, 0f, 0f, 0.45f), 0f, 0f, GameUi.Width, GameUi.Height, true);
                 fonts.Draw(host, "white_stroked_big", "CHOOSE DYNAMON", GameUi.Width * 0.5f, 96f, 18f, "center");
@@ -1040,18 +1758,24 @@ namespace Dynamons
                 {
                     ui.Sound("screen_close", save);
                     modalPickingStoneTarget = false;
-                    RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                    RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose, pvpPouch);
                 });
                 return;
             }
 
             var order = data.items.Select((it, idx) => (it.id, idx)).ToDictionary(x => x.id, x => x.idx);
-            var allOwned = save.Inventory
-                .Where(row => row.amount > 0 && (!inBattle || (data.Item(row.id)?.inBattle == true && (row.id != "discatch" || allowCatch))))
-                .OrderBy(row => order.TryGetValue(row.id, out int idx) ? idx : 999)
-                .ToArray();
+            var allOwned = pvpPouch != null
+                ? pvpPouch
+                    .Where(slot => slot != null && slot.count > 0 && slot.id != "discatch" && data.Item(slot.id)?.inBattle == true)
+                    .Select(slot => new Reward { id = slot.id, amount = slot.count })
+                    .OrderBy(row => order.TryGetValue(row.id, out int idx) ? idx : 999)
+                    .ToArray()
+                : save.Inventory
+                    .Where(row => row.amount > 0 && (!inBattle || (data.Item(row.id)?.inBattle == true && (row.id != "discatch" || allowCatch))))
+                    .OrderBy(row => order.TryGetValue(row.id, out int idx) ? idx : 999)
+                    .ToArray();
 
-            var entries = inBattle || modalItemFilter == 0
+            var entries = inBattle || pvpPouch != null || modalItemFilter == 0
                 ? allOwned
                 : allOwned.Where(row =>
                 {
@@ -1072,7 +1796,7 @@ namespace Dynamons
             var slotOverlay = GameUi.Box("BagSlotOverlays", host, 0f, 0f, GameUi.Width, GameUi.Height);
             var slotBadgeVec = VectorCanvas.Create("BagSlotBadgeVec", slotOverlay, 0f, 0f, GameUi.Width, GameUi.Height);
 
-            if (!inBattle)
+            if (!inBattle && pvpPouch == null)
             {
                 var tabs = new[] { ("ALL", 0), ("MAP USE", 1), ("BATTLE", 2) };
                 for (int t = 0; t < tabs.Length; t++)
@@ -1092,7 +1816,7 @@ namespace Dynamons
                         modalItemFilter = fv;
                         modalItemPage = 0;
                         modalSelectedItemId = null;
-                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose, pvpPouch);
                     });
                 }
             }
@@ -1121,14 +1845,14 @@ namespace Dynamons
                 {
                     var row = pageItems[i];
                     var slotItem = data.Item(row.id);
-                    bool slotUsable = IsItemUsable(row.id, inBattle, allowCatch, blockCans);
+                    bool slotUsable = IsItemUsable(row.id, inBattle, allowCatch, blockCans, pvpPouch);
                     bool isSel = row.id == modalSelectedItemId;
 
                     ui.ArtButton(host, "items/item_slot", cx - 27.5f, cy - 27.5f, 55f, 55f, () =>
                     {
                         ui.Sound("button_click", save);
                         modalSelectedItemId = row.id;
-                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose, pvpPouch);
                     });
                     if (isSel) ui.Art(host, "items/item_selected", cx - 30f, cy - 30f, 60f, 60f);
                     ui.Art(host, GameUi.Item(row.id), cx - 19f, cy - 22f, 38f, 38f, true, slotUsable ? 1f : 0.48f);
@@ -1184,7 +1908,7 @@ namespace Dynamons
                         ui.Sound("button_click", save);
                         modalItemPage--;
                         modalSelectedItemId = null;
-                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose, pvpPouch);
                     });
                 }
 
@@ -1200,16 +1924,16 @@ namespace Dynamons
                         ui.Sound("button_click", save);
                         modalItemPage++;
                         modalSelectedItemId = null;
-                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose, pvpPouch);
                     });
                 }
             }
 
-            bool canUse = IsItemUsable(modalSelectedItemId, inBattle, allowCatch, blockCans);
+            bool canUse = IsItemUsable(modalSelectedItemId, inBattle, allowCatch, blockCans, pvpPouch);
             ui.ArtButton(host, "items/btn_use", (GameUi.Width - 105f) * 0.5f, useY, 105f, 45f, () =>
             {
-                if (!IsItemUsable(modalSelectedItemId, inBattle, allowCatch, blockCans)) return;
-                if (!inBattle && modalSelectedItemId.StartsWith("levelup_", StringComparison.Ordinal))
+                if (!IsItemUsable(modalSelectedItemId, inBattle, allowCatch, blockCans, pvpPouch)) return;
+                if (pvpPouch == null && !inBattle && modalSelectedItemId.StartsWith("levelup_", StringComparison.Ordinal))
                 {
                     var targets = ReadyTargetsForStone(modalSelectedItemId);
                     if (targets.Count > 1)
@@ -1217,7 +1941,7 @@ namespace Dynamons
                         ui.Sound("button_click", save);
                         modalPickingStoneTarget = true;
                         modalStoneId = modalSelectedItemId;
-                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose);
+                        RenderItemsModalContents(host, inBattle, allowCatch, blockCans, onUse, onClose, pvpPouch);
                         return;
                     }
                     if (targets.Count == 1) { GameUi.Clear(host); onUse?.Invoke(modalSelectedItemId + ":" + targets[0].monIndex); return; }
@@ -1296,7 +2020,7 @@ namespace Dynamons
             }
             else
             {
-                bool filteredEmpty = !inBattle && allOwned.Length > 0;
+                bool filteredEmpty = !inBattle && pvpPouch == null && allOwned.Length > 0;
                 fonts.Draw(slotOverlay, "black_small", filteredEmpty ? "NO ITEMS IN THIS TAB" : "YOUR BAG IS EMPTY",
                     GameUi.Width * 0.5f, bgY + 115f, 10.5f, "center");
                 fonts.Draw(slotOverlay, "white_small", filteredEmpty ? "Switch filter tab to view other items." : "Find items in battles and loot bags.",

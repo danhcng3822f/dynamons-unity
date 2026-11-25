@@ -37,7 +37,9 @@ namespace Dynamons
         private Product shopLastProduct;
 
         private Reward[] resultLoot = Array.Empty<Reward>();
-        private bool resultSaved = true, resultXpRevealDone;
+        private bool resultSaved = true, resultXpRevealDone, pvpResultActive, pvpResultShown;
+        private string pvpResultOutcome = "win", pvpResultStatusNote = string.Empty;
+        private int pvpResultCoins;
         private float resultElapsedMs;
         private List<(int teamIndex, CombatantView fallbackMon)> resultMonQueue = new List<(int, CombatantView)>();
         private List<Reward> resultDisplayRewards = new List<Reward>();
@@ -66,6 +68,7 @@ namespace Dynamons
 
             shopLootOpen = false;
             resultActive = false;
+            pvpResultActive = false;
         }
 
         private void UpdateCollectionAnimations()
@@ -1197,6 +1200,135 @@ namespace Dynamons
                 GameUi.Width * 0.5f - 67.5f, 260f, 135f, 25f, animRatio, 0.04f, 0.96f);
             if (readyToLevel)
                 ui.Art(resultDynamicStage, "general/badge_levelup", GameUi.Width * 0.5f + 54f, 262f, 24f, 24f, true);
+        }
+
+        private void ShowPvpResult(string outcome)
+        {
+            if (pvpResultShown) return;
+            pvpResultShown = true;
+            inPvpBattle = false;
+            pvpActive = false;
+            pvpResultOutcome = outcome == "win" ? "win" : "loss";
+            pvpResultCoins = pvpResultOutcome == "win"
+                ? (pvpResolvedTurns >= 1 ? 50 : 0)
+                : (pvpResolvedTurns >= 2 ? 15 : 0);
+            if (pvpResultCoins > 0)
+            {
+                save.Coins += pvpResultCoins;
+                Persist();
+            }
+            resultSuperlativeIdx = 1 + (int)((battleTimeMs + save.Coins) % 4);
+            if (pvpResultOutcome == "win") ui.Sound("win_battle", save);
+            else ui.Sound("stat_lowered", save);
+            RenderPvpResultView();
+        }
+
+        private void RenderPvpResultView()
+        {
+            BeginPage(null); Track("music_map_loop");
+            pvpResultActive = true;
+            ui.Art(page, "team/bg_team", 0f, 0f, GameUi.Width, GameUi.Height);
+            GameUi.Fill(page, new Color(0f, 0f, 0f, 0.48f), 0f, 0f, GameUi.Width, GameUi.Height);
+
+            if (pvpResultOutcome == "win")
+            {
+                ui.Art(page, $"session/endscreen/superlative{resultSuperlativeIdx}", 92.5f, 18f, 135f, 30f, true);
+                ui.Art(page, "session/endscreen/you_win", 40f, 50f, 240f, 55f, true);
+            }
+            else
+            {
+                fonts.Draw(page, "white_stroked_big", "DEFEAT", GameUi.Width * 0.5f, 56f, 24f, "center");
+            }
+
+            ui.Art(page, "general/pedestal", 44f, 206f, 232f, 141.5f, true);
+            ui.Art(page, "session/mon_shadow", 102.5f, 236f, 115f, 28f, true, 0.65f);
+
+            var leadView = viewPlayer.Count > 0 ? viewPlayer[0] : null;
+            var leadSaved = save.Team.FirstOrDefault();
+            string showMonId = leadView?.MonId ?? leadSaved?.MonId;
+            int showLvl = leadView?.Level ?? leadSaved?.Level ?? 1;
+            int showHp = leadView?.Hp ?? data.battleData.maxHP;
+            int maxHp = leadView?.MaxHp ?? data.battleData.maxHP;
+
+            if (!string.IsNullOrEmpty(showMonId))
+            {
+                ui.Art(page, GameUi.Mon(showMonId, "front"), 108f, 158f, 104f, 96f, true);
+                if (data.Mon(showMonId) != null)
+                {
+                    HudWidgets.DrawMonPane(ui, fonts, data, page, new MonHudView
+                    {
+                        MonId = showMonId, Level = showLvl, Hp = showHp, MaxHp = maxHp,
+                    }, "tooltip", GameUi.Width * 0.5f - 50f, 96f, showHpBar: true);
+                }
+            }
+
+            string vsLine = $"VS {pvpPeerName} - {pvpResolvedTurns} {(pvpResolvedTurns == 1 ? "TURN" : "TURNS")}";
+            fonts.Draw(page, "white_stroked_small", vsLine, GameUi.Width * 0.5f, 270f, 9.5f, "center", null, 280f);
+            if (!string.IsNullOrEmpty(pvpResultStatusNote))
+            {
+                fonts.Draw(page, "white_stroked_small", pvpResultStatusNote, GameUi.Width * 0.5f, 294f, 9f, "center",
+                    pvpRemoteRematchRequested ? GameUi.Gold : GameUi.HexColor("#ff9aa3"), 280f);
+            }
+
+            ui.Art(page, "session/endscreen/rewards_modal", 32.5f, 352f, 255f, 90f, true);
+            const float rx = (GameUi.Width - 55f) * 0.5f, ry = 368f;
+            ui.Art(page, "general/reward_slot", rx, ry, 55f, 55f);
+            ui.Art(page, GameUi.Item("coins"), rx + 9f, ry + 5f, 37f, 37f, true);
+            string coinLabel = pvpResultCoins == 50 ? "50 COINS" : pvpResultCoins == 15 ? "15 COINS" : "0 COINS";
+            fonts.Draw(page, "white_stroked_small", coinLabel, GameUi.Width * 0.5f, ry + 41f, 8.5f, "center",
+                pvpResultCoins > 0 ? GameUi.Gold : new Color(0.84f, 0.84f, 0.92f, 0.85f));
+            if (pvpResultCoins == 0)
+            {
+                fonts.Draw(page, "white_stroked_small", "PLAY MORE TURNS TO EARN COINS", GameUi.Width * 0.5f, 430f, 7.5f, "center",
+                    new Color(0.84f, 0.88f, 1f, 0.9f), 240f);
+            }
+
+            bool canRematch = lanTransport != null && lanTransport.IsConnected;
+            var btnVec = VectorCanvas.Create("PvpResultBtnsVec", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            if (canRematch)
+            {
+                btnVec.FillRoundRect(24f, 470f, 130f, 42f, 9f, GameUi.HexColor("#2b8a4e"));
+                btnVec.StrokeRoundRect(24f, 470f, 130f, 42f, 9f, GameUi.HexColor("#ffe259"), 1.6f);
+                btnVec.FillRoundRect(166f, 470f, 130f, 42f, 9f, GameUi.HexColor("#2b7cff"));
+                btnVec.StrokeRoundRect(166f, 470f, 130f, 42f, 9f, GameUi.HexColor("#7be0ff"), 1.6f);
+                btnVec.Commit();
+
+                fonts.Draw(page, "white_stroked_small", "REMATCH", 89f, 484f, 12f, "center");
+                ui.HitBox(page, 24f, 470f, 130f, 42f, () =>
+                {
+                    if (lanTransport == null || !lanTransport.IsConnected)
+                    {
+                        pvpResultStatusNote = "OPPONENT DISCONNECTED";
+                        RenderPvpResultView();
+                        return;
+                    }
+                    ui.Sound("cool_button", save);
+                    lanTransport.Send("rematch", new LanPingDto { ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+                    ReopenLanReadyRoomForRematch();
+                });
+
+                fonts.Draw(page, "white_stroked_small", "TO ISLAND", 231f, 484f, 11.5f, "center");
+                ui.HitBox(page, 166f, 470f, 130f, 42f, () =>
+                {
+                    ui.Sound("button_click", save);
+                    pvpResultActive = false;
+                    ReturnToLanIsland();
+                });
+            }
+            else
+            {
+                btnVec.FillRoundRect(90f, 470f, 140f, 42f, 9f, GameUi.HexColor("#2b7cff"));
+                btnVec.StrokeRoundRect(90f, 470f, 140f, 42f, 9f, GameUi.HexColor("#7be0ff"), 1.6f);
+                btnVec.Commit();
+
+                fonts.Draw(page, "white_stroked_small", "TO ISLAND", 160f, 484f, 12f, "center");
+                ui.HitBox(page, 90f, 470f, 140f, 42f, () =>
+                {
+                    ui.Sound("button_click", save);
+                    pvpResultActive = false;
+                    ReturnToLanIsland();
+                });
+            }
         }
     }
 }

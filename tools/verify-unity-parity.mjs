@@ -311,10 +311,11 @@ function checkFontDesignRulesAndDtoConstraints() {
       assert.ok(/\bvoid\s+ShutdownLanNetworking\s*\(\s*\)/.test(txt), 'PvpLobbyView.cs must define ShutdownLanNetworking()');
       assert.ok(/\bvoid\s+OpenLanLobby\s*\(\s*\)/.test(txt), 'PvpLobbyView.cs must define OpenLanLobby()');
       assert.ok(/\bvoid\s+CloseLanLobby\s*\(/.test(txt), 'PvpLobbyView.cs must define CloseLanLobby()');
-      assert.ok(/\bvoid\s+BeginPvpBattle\s*\(\s*LanStartMatchDto\s+[^,]+,\s*bool\s+[^)]+\)/.test(txt),
-        'PvpLobbyView.cs must expose BeginPvpBattle(LanStartMatchDto, bool) hook');
-      assert.ok(/\bvoid\s+OnPvpNetMessage\s*\(\s*LanNetMessage\s+[^)]+\)/.test(txt),
-        'PvpLobbyView.cs must expose OnPvpNetMessage(LanNetMessage) hook');
+      assert.ok(!/\bvoid\s+BeginPvpBattle\s*\(/.test(txt),
+        'PvpLobbyView.cs must remove Task 6 BeginPvpBattle stub');
+      assert.ok(!/\bvoid\s+OnPvpNetMessage\s*\(/.test(txt),
+        'PvpLobbyView.cs must remove Task 6 OnPvpNetMessage stub');
+      assert.ok(txt.includes('"rematch"'), 'PvpLobbyView.cs must handle rematch transitions');
       assert.ok(txt.includes('ui.TextField('), 'PvpLobbyView.cs must use GameUi.TextField for manual IP entry');
       assert.ok(txt.includes('HudWidgets.DrawMonPane('), 'PvpLobbyView.cs must render team previews via HudWidgets.DrawMonPane');
       assert.ok(txt.includes('DrainMainThreadMessages(') && txt.includes('GetRooms(') && txt.includes('UpdateBeacon('),
@@ -336,6 +337,36 @@ function checkFontDesignRulesAndDtoConstraints() {
       assert.ok(txt.includes('GameData.HasPassive(') && txt.includes('GameData.PassiveKey('), 'BattleView.cs must guard passives with GameData.HasPassive/PassiveKey');
       assert.ok(txt.includes('else if (ev.Type == "miss")'), 'BattleView.cs must render miss feedback immediately in BeginBattleEvent');
       assert.ok(txt.includes('general/huds/tip_strong') && txt.includes('general/huds/tip_weak'), 'BattleView.cs must show effectiveness hints on move buttons');
+      assert.ok(/\bvoid\s+BeginPvpBattle\s*\(\s*LanStartMatchDto\s+[^,]+,\s*bool\s+[^)]+\)/.test(txt),
+        'BattleView.cs must define BeginPvpBattle(LanStartMatchDto, bool)');
+      assert.ok(/\bvoid\s+OnPvpNetMessage\s*\(\s*LanNetMessage\s+[^)]+\)/.test(txt),
+        'BattleView.cs must define OnPvpNetMessage(LanNetMessage)');
+      for (const expected of ['LanTurnResultDto', 'LanAnimDoneDto', 'LanActionCmdDto', 'LanCodec.EventFromDto',
+        'HudWidgets.DrawCaptainHud', '"general/enemies/lan_npc_icon"', 'LanConst.TurnTimeoutSec', 'LanConst.AnimGraceSec',
+        '"OPPONENT TURN', '"OPPONENT CHOOSING..."', 'pvpPouch', 'flow.StartBattle', 'flow.CommitBattle']) {
+        assert.ok(txt.includes(expected), `BattleView.cs missing ${expected}`);
+      }
+      assert.ok(/\bvoid\s+OpenItemsOverlay\s*\([^)]*IReadOnlyList<LanItemSlotDto>\s+pvpPouch\b/.test(txt),
+        'BattleView.cs OpenItemsOverlay must accept optional IReadOnlyList<LanItemSlotDto> pvpPouch');
+    }
+    if (rel.endsWith('CollectionView.cs')) {
+      assert.ok(/\bvoid\s+ShowPvpResult\s*\(\s*string\s+[^)]+\)/.test(txt),
+        'CollectionView.cs must define ShowPvpResult(string)');
+      const showPvpBody = extractBraceBlock(txt, /void\s+ShowPvpResult\s*\([^)]*\)/);
+      assert.ok(showPvpBody !== null, 'CollectionView.cs ShowPvpResult must have a block body');
+      assert.ok(showPvpBody.includes('pvpResolvedTurns >= 1') && showPvpBody.includes('50') &&
+        showPvpBody.includes('pvpResolvedTurns >= 2') && showPvpBody.includes('15'),
+        'ShowPvpResult() must implement anti-farm 50/15/0 Coin reward logic');
+      assert.ok(!/(?:save\.Team\.(?:Add|Remove|RemoveAt|Clear|Insert|Sort)|save\.Team\[|save\.Inventory\.(?:Add|Remove|RemoveAt|Clear|Insert)|save\.(?:Take|Add)\(|save\.ClearedNodes\.(?:Add|Remove|Clear)|save\.NodeId\s*=)/.test(showPvpBody),
+        'ShowPvpResult() must NEVER mutate save.Team, save.Inventory, save.ClearedNodes, or save.NodeId');
+      const renderPvpBody = extractBraceBlock(txt, /void\s+RenderPvpResultView\s*\(\s*\)/);
+      assert.ok(renderPvpBody !== null, 'CollectionView.cs must define RenderPvpResultView()');
+      for (const expected of ['"REMATCH"', '"TO ISLAND"', '"DEFEAT"', '"session/endscreen/you_win"',
+        'ReturnToLanIsland()', 'IsConnected', 'COINS']) {
+        assert.ok(renderPvpBody.includes(expected), `RenderPvpResultView() missing ${expected}`);
+      }
+      assert.ok(!/(?:save\.Team\.(?:Add|Remove|RemoveAt|Clear|Insert|Sort)|save\.Team\[|save\.Inventory\.(?:Add|Remove|RemoveAt|Clear|Insert)|save\.(?:Take|Add)\(|save\.ClearedNodes\.(?:Add|Remove|Clear)|save\.NodeId\s*=)/.test(renderPvpBody),
+        'RenderPvpResultView() must NEVER mutate save.Team, save.Inventory, save.ClearedNodes, or save.NodeId');
     }
     if (file.includes('/Scripts/Unity/') && !file.endsWith('GameUi.cs') && !file.endsWith('GameRoot.cs')) {
       assert.ok(!/\bui\.Label\(/.test(txt), `${rel}: Must use BitmapFontRegistry instead of legacy ui.Label`);

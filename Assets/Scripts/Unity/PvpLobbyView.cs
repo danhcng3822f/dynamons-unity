@@ -19,13 +19,14 @@ namespace Dynamons
 
         private bool lobbyOpen, lobbyHostMode = true, lobbyInReadyRoom, lobbyTcpConnected, sentLocalHello;
         private bool lobbyItemsAllowed, lobbyConnecting, lobbyStatusIsError, lobbyStartingMatch;
+        private bool pvpRemoteRematchRequested, lobbyAwaitingRematch;
         private string lobbyRuleMode = "fair20";
         private string lobbyRoomId = string.Empty;
         private string lastEnteredIp = string.Empty;
         private string lobbyStatusMessage = string.Empty;
         private string lastRoomsSignature = string.Empty;
         private float roomListPollTimer;
-        private LanHelloDto remoteHello;
+        private LanHelloDto remoteHello, pvpRemoteHello;
 
         private RectTransform lobbyTabsLayer, lobbyDynamicLayer, lobbyManualJoinLayer, lobbyConnectStatusLayer;
         private InputField lobbyIpInput;
@@ -47,8 +48,12 @@ namespace Dynamons
         {
             inPvpBattle = false;
             pvpIsHost = false;
+            pvpResultActive = false;
             pvpRules = null;
             pvpStartMatch = null;
+            pvpRemoteHello = null;
+            pvpRemoteRematchRequested = false;
+            lobbyAwaitingRematch = false;
             lobbyOpen = false;
             lobbyInReadyRoom = false;
             lobbyTcpConnected = false;
@@ -63,36 +68,8 @@ namespace Dynamons
             lanTransport?.Stop();
         }
 
-        /// <summary>Opens the LAN PvP Host/Join lobby overlay from the LAN Island duel gate.</summary>
-        internal void OpenLanLobby()
+        private void BuildLanLobbyChrome()
         {
-            if (save == null || save.Team == null || save.Team.Count == 0)
-            {
-                Note("PICK A DYNAMON FIRST.");
-                return;
-            }
-
-            inPvpBattle = false;
-            pvpIsHost = false;
-            pvpRules = null;
-            pvpStartMatch = null;
-            EnsureLanTransport().Stop();
-
-            lobbyHostMode = true;
-            lobbyRuleMode = "fair20";
-            lobbyItemsAllowed = false;
-            lobbyInReadyRoom = false;
-            lobbyTcpConnected = false;
-            sentLocalHello = false;
-            lobbyConnecting = false;
-            lobbyStartingMatch = false;
-            lobbyStatusIsError = false;
-            lobbyStatusMessage = string.Empty;
-            lastRoomsSignature = string.Empty;
-            remoteHello = null;
-            lobbyRoomId = Guid.NewGuid().ToString("N").Substring(0, 8);
-
-            ui.Sound("screen_open", save);
             OpenOverlayShell(0.75f);
 
             var cardVec = VectorCanvas.Create("LanLobbyCard", overlay, 0f, 0f, GameUi.Width, GameUi.Height);
@@ -113,7 +90,43 @@ namespace Dynamons
                 ui.Sound("screen_close", save);
                 CloseLanLobby();
             }, true, 1f, "LanLobbyCloseBtn");
+        }
 
+        /// <summary>Opens the LAN PvP Host/Join lobby overlay from the LAN Island duel gate.</summary>
+        internal void OpenLanLobby()
+        {
+            if (save == null || save.Team == null || save.Team.Count == 0)
+            {
+                Note("PICK A DYNAMON FIRST.");
+                return;
+            }
+
+            inPvpBattle = false;
+            pvpIsHost = false;
+            pvpResultActive = false;
+            pvpRules = null;
+            pvpStartMatch = null;
+            pvpRemoteHello = null;
+            pvpRemoteRematchRequested = false;
+            lobbyAwaitingRematch = false;
+            EnsureLanTransport().Stop();
+
+            lobbyHostMode = true;
+            lobbyRuleMode = "fair20";
+            lobbyItemsAllowed = false;
+            lobbyInReadyRoom = false;
+            lobbyTcpConnected = false;
+            sentLocalHello = false;
+            lobbyConnecting = false;
+            lobbyStartingMatch = false;
+            lobbyStatusIsError = false;
+            lobbyStatusMessage = string.Empty;
+            lastRoomsSignature = string.Empty;
+            remoteHello = null;
+            lobbyRoomId = Guid.NewGuid().ToString("N").Substring(0, 8);
+
+            ui.Sound("screen_open", save);
+            BuildLanLobbyChrome();
             lobbyOpen = true;
             EnterHostMode();
         }
@@ -127,7 +140,10 @@ namespace Dynamons
             sentLocalHello = false;
             lobbyConnecting = false;
             lobbyStartingMatch = false;
+            lobbyAwaitingRematch = false;
+            pvpRemoteRematchRequested = false;
             remoteHello = null;
+            pvpRemoteHello = null;
             lobbyStatusMessage = string.Empty;
             lobbyStatusIsError = false;
             lastRoomsSignature = string.Empty;
@@ -144,12 +160,83 @@ namespace Dynamons
             sentLocalHello = false;
             lobbyConnecting = false;
             lobbyStartingMatch = false;
+            lobbyAwaitingRematch = false;
             remoteHello = null;
             lobbyStatusMessage = string.Empty;
             lobbyStatusIsError = false;
             lastRoomsSignature = string.Empty;
             ResetLanLobbyRefs();
             CloseOverlay();
+        }
+
+        internal void ReopenLanReadyRoomForRematch()
+        {
+            bool wasHost = pvpIsHost;
+            var savedRemote = pvpRemoteHello ?? BuildFallbackRemoteHello();
+            string rule = lobbyRuleMode == "real" ? "real" : "fair20";
+            bool items = lobbyItemsAllowed;
+
+            inPvpBattle = false;
+            pvpActive = false;
+            pvpResultActive = false;
+            pvpRules = null;
+
+            onLanIsland = true;
+            ShowMap();
+
+            if (lanTransport == null || !lanTransport.IsConnected)
+            {
+                StopLanSession();
+                Note("OPPONENT DISCONNECTED");
+                return;
+            }
+
+            pvpIsHost = wasHost;
+            lobbyHostMode = wasHost;
+            lobbyRuleMode = rule;
+            lobbyItemsAllowed = items;
+            remoteHello = savedRemote;
+            pvpRemoteHello = savedRemote;
+            lobbyOpen = true;
+            lobbyInReadyRoom = true;
+            lobbyTcpConnected = true;
+            sentLocalHello = true;
+            lobbyConnecting = false;
+            lobbyStartingMatch = false;
+            lobbyAwaitingRematch = wasHost && !pvpRemoteRematchRequested;
+            lobbyStatusIsError = false;
+            lobbyStatusMessage = lobbyAwaitingRematch
+                ? "WAITING FOR OPPONENT REMATCH..."
+                : (pvpRemoteRematchRequested ? "OPPONENT READY FOR REMATCH!" : string.Empty);
+
+            BuildLanLobbyChrome();
+            RebuildLobbyChrome();
+            if (wasHost) UpdateHostBeaconAndSync();
+        }
+
+        private LanHelloDto BuildFallbackRemoteHello()
+        {
+            var sourceTeam = pvpStartMatch != null
+                ? (pvpIsHost ? pvpStartMatch.clientTeam : pvpStartMatch.hostTeam)
+                : null;
+            var mons = new List<LanTeamMemberDto>(3);
+            if (sourceTeam != null)
+            {
+                for (int i = 0; i < sourceTeam.Length && mons.Count < 3; i++)
+                {
+                    var m = sourceTeam[i];
+                    if (m == null || string.IsNullOrEmpty(m.monId)) continue;
+                    mons.Add(new LanTeamMemberDto { monId = m.monId, level = m.level });
+                }
+            }
+            return new LanHelloDto
+            {
+                proto = LanConst.ProtocolVersion,
+                playerName = SanitizeDisplayName(pvpPeerName, pvpIsHost ? "RIVAL" : "HOST"),
+                avatarId = "hero",
+                partySize = mons.Count,
+                mons = mons.ToArray()
+            };
         }
 
         /// <summary>Drains LAN socket events on the Unity main thread and updates lobby discovery/animations.</summary>
@@ -167,7 +254,7 @@ namespace Dynamons
             {
                 var msg = messages[i];
                 if (msg == null || string.IsNullOrEmpty(msg.Type)) continue;
-                if (inPvpBattle)
+                if (inPvpBattle || pvpResultActive)
                 {
                     OnPvpNetMessage(msg);
                     continue;
@@ -198,8 +285,12 @@ namespace Dynamons
         {
             inPvpBattle = false;
             pvpIsHost = false;
+            pvpResultActive = false;
             pvpRules = null;
             pvpStartMatch = null;
+            pvpRemoteHello = null;
+            pvpRemoteRematchRequested = false;
+            lobbyAwaitingRematch = false;
             lobbyOpen = false;
             lobbyInReadyRoom = false;
             lobbyTcpConnected = false;
@@ -215,30 +306,6 @@ namespace Dynamons
             }
         }
 
-        // TODO(Task 7): Replace forward compilation hook in BattleView.cs.
-        internal void BeginPvpBattle(LanStartMatchDto startMatch, bool isHost)
-        {
-            pvpStartMatch = startMatch;
-            pvpIsHost = isHost;
-            inPvpBattle = true;
-            CloseLanLobbyOverlayOnly();
-            Debug.Log($"[LAN] BeginPvpBattle ({(isHost ? "host" : "client")}) rule={startMatch?.ruleMode} items={startMatch?.itemsAllowed}");
-            Note("DUEL READY! BATTLE VIEW WIRES IN NEXT TASK.");
-        }
-
-        // TODO(Task 7): Replace forward compilation hook in BattleView.cs.
-        internal void OnPvpNetMessage(LanNetMessage msg)
-        {
-            if (msg == null) return;
-            Debug.Log($"[LAN] OnPvpNetMessage type={msg.Type} reason={msg.Reason}");
-            if (msg.Type == "disconnected")
-            {
-                string reason = SanitizeStatusText(msg.Reason, "OPPONENT DISCONNECTED");
-                ReturnToLanIsland();
-                Note(reason);
-            }
-        }
-
         private void EnterHostMode(bool preserveStatus = false)
         {
             lobbyHostMode = true;
@@ -247,9 +314,11 @@ namespace Dynamons
             sentLocalHello = false;
             lobbyConnecting = false;
             lobbyStartingMatch = false;
+            lobbyAwaitingRematch = false;
             remoteHello = null;
             if (!preserveStatus)
             {
+                pvpRemoteRematchRequested = false;
                 lobbyStatusMessage = string.Empty;
                 lobbyStatusIsError = false;
             }
@@ -271,11 +340,13 @@ namespace Dynamons
             sentLocalHello = false;
             lobbyConnecting = false;
             lobbyStartingMatch = false;
+            lobbyAwaitingRematch = false;
             remoteHello = null;
             lastRoomsSignature = string.Empty;
             roomListPollTimer = 0f;
             if (!preserveStatus)
             {
+                pvpRemoteRematchRequested = false;
                 lobbyStatusMessage = string.Empty;
                 lobbyStatusIsError = false;
             }
@@ -746,8 +817,9 @@ namespace Dynamons
 
             if (lobbyHostMode)
             {
-                vec.FillRoundRect(48f, 408f, 224f, 44f, 10f, GameUi.HexColor("#2b8a4e"));
-                vec.StrokeRoundRect(48f, 408f, 224f, 44f, 10f, GameUi.HexColor("#ffe259"), 2f);
+                bool canStart = !lobbyAwaitingRematch;
+                vec.FillRoundRect(48f, 408f, 224f, 44f, 10f, GameUi.HexColor(canStart ? "#2b8a4e" : "#2c204a"));
+                vec.StrokeRoundRect(48f, 408f, 224f, 44f, 10f, GameUi.HexColor(canStart ? "#ffe259" : "#7be0ff"), canStart ? 2f : 1.5f);
             }
             else
             {
@@ -783,8 +855,15 @@ namespace Dynamons
 
             if (lobbyHostMode)
             {
-                fonts.Draw(lobbyDynamicLayer, "white_stroked_big", "START DUEL", 160f, 422f, 15f, "center");
-                ui.HitBox(lobbyDynamicLayer, 48f, 408f, 224f, 44f, OnHostStartDuel);
+                if (lobbyAwaitingRematch)
+                {
+                    fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "WAITING FOR RIVAL", 160f, 424f, 11.5f, "center");
+                }
+                else
+                {
+                    fonts.Draw(lobbyDynamicLayer, "white_stroked_big", "START DUEL", 160f, 422f, 15f, "center");
+                    ui.HitBox(lobbyDynamicLayer, 48f, 408f, 224f, 44f, OnHostStartDuel);
+                }
             }
             else
             {
@@ -862,9 +941,11 @@ namespace Dynamons
                     hello.mons = validMons;
                     hello.playerName = SanitizeDisplayName(hello.playerName, lobbyHostMode ? "RIVAL" : "HOST");
                     remoteHello = hello;
+                    pvpRemoteHello = hello;
                     if (!sentLocalHello) SendLocalHello();
                     lobbyInReadyRoom = true;
                     lobbyConnecting = false;
+                    lobbyAwaitingRematch = false;
                     lobbyStatusIsError = false;
                     lobbyStatusMessage = string.Empty;
                     ui.Sound("screen_open", save);
@@ -879,6 +960,18 @@ namespace Dynamons
                     lobbyRuleMode = cfg.ruleMode == "real" ? "real" : "fair20";
                     lobbyItemsAllowed = cfg.itemsAllowed;
                     if (lobbyInReadyRoom) RenderReadyRoom();
+                    break;
+                }
+                case "rematch":
+                {
+                    pvpRemoteRematchRequested = true;
+                    lobbyAwaitingRematch = false;
+                    if (lobbyInReadyRoom)
+                    {
+                        lobbyStatusIsError = false;
+                        lobbyStatusMessage = "OPPONENT READY FOR REMATCH!";
+                        RenderReadyRoom();
+                    }
                     break;
                 }
                 case "start":
