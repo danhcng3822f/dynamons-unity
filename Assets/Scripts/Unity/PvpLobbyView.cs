@@ -361,6 +361,8 @@ namespace Dynamons
             lobbyWaitPulseGroup = null;
 
             bool fair = lobbyRuleMode != "real";
+            bool hostReady = lanTransport != null && lanTransport.IsHost;
+            bool showRetry = !hostReady && !lobbyTcpConnected;
             var vec = VectorCanvas.Create("HostLobbyVec", lobbyDynamicLayer, 0f, 0f, GameUi.Width, GameUi.Height);
             DrawRulePill(vec, 24f, 138f, 132f, 34f, fair, "#2b7cff");
             DrawRulePill(vec, 164f, 138f, 132f, 34f, !fair, "#c85a1c");
@@ -371,10 +373,20 @@ namespace Dynamons
             vec.StrokeRoundRect(24f, 258f, 272f, 106f, 10f, GameUi.HexColor("#6b5e8a"), 1.5f);
 
             vec.FillRoundRect(24f, 376f, 272f, 92f, 10f, GameUi.HexColor("#2c204a"));
-            vec.StrokeRoundRect(24f, 376f, 272f, 92f, 10f, GameUi.HexColor(lobbyStatusIsError ? "#ff6b6b" : "#7be0ff"), 1.5f);
+            vec.StrokeRoundRect(24f, 376f, 272f, 92f, 10f, GameUi.HexColor(lobbyStatusIsError || !hostReady ? "#ff6b6b" : "#7be0ff"), 1.5f);
 
-            vec.FillRoundRect(90f, 486f, 140f, 38f, 9f, GameUi.HexColor("#a64f37"));
-            vec.StrokeRoundRect(90f, 486f, 140f, 38f, 9f, GameUi.HexColor("#e8b35a"), 1.5f);
+            if (showRetry)
+            {
+                vec.FillRoundRect(24f, 486f, 130f, 38f, 9f, GameUi.HexColor("#2b8a4e"));
+                vec.StrokeRoundRect(24f, 486f, 130f, 38f, 9f, GameUi.HexColor("#ffe259"), 1.5f);
+                vec.FillRoundRect(166f, 486f, 130f, 38f, 9f, GameUi.HexColor("#a64f37"));
+                vec.StrokeRoundRect(166f, 486f, 130f, 38f, 9f, GameUi.HexColor("#e8b35a"), 1.5f);
+            }
+            else
+            {
+                vec.FillRoundRect(90f, 486f, 140f, 38f, 9f, GameUi.HexColor("#a64f37"));
+                vec.StrokeRoundRect(90f, 486f, 140f, 38f, 9f, GameUi.HexColor("#e8b35a"), 1.5f);
+            }
             vec.Commit();
 
             fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "BATTLE RULES", 24f, 118f, 10f, "left");
@@ -392,37 +404,72 @@ namespace Dynamons
             ui.HitBox(lobbyDynamicLayer, 24f, 180f, 132f, 34f, () => SetHostItemsAllowed(false));
             ui.HitBox(lobbyDynamicLayer, 164f, 180f, 132f, 34f, () => SetHostItemsAllowed(true));
 
-            int port = lanTransport != null && lanTransport.BoundPort > 0 ? lanTransport.BoundPort : LanConst.BattlePortBase;
-            string[] ips = LanTransport.LocalIpv4Addresses();
-            string primaryIp = ips.Length > 0 ? ips[0] : "127.0.0.1";
-            string secondaryLine = ips.Length > 1 ? $"ALT {ips[1]}:{port}" : $"LOCALHOST 127.0.0.1:{port}";
+            if (hostReady || lobbyTcpConnected)
+            {
+                int port = lanTransport != null && lanTransport.BoundPort > 0 ? lanTransport.BoundPort : LanConst.BattlePortBase;
+                string[] ips = LanTransport.LocalIpv4Addresses();
+                string primaryIp = ips.Length > 0 ? ips[0] : "127.0.0.1";
+                string secondaryLine = ips.Length > 1 ? $"ALT {ips[1]}:{port}" : $"LOCALHOST 127.0.0.1:{port}";
 
-            fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "SHARE IP WITH OPPONENT", 160f, 269f, 9.5f, "center");
-            fonts.Draw(lobbyDynamicLayer, "white_small", $"IP {primaryIp} PORT {port}", 160f, 294f, 10.5f, "center", GameUi.Gold, 256f);
-            fonts.Draw(lobbyDynamicLayer, "white_small", secondaryLine, 160f, 316f, 9f, "center", new Color(0.84f, 0.88f, 1f, 0.9f), 256f);
-            fonts.Draw(lobbyDynamicLayer, "white_small", $"ROOM HOST: {LocalPlayerName()}", 160f, 338f, 9f, "center", null, 256f);
-
-            var waitBox = GameUi.Box("HostWaitText", lobbyDynamicLayer, 0f, 0f, GameUi.Width, GameUi.Height);
-            lobbyWaitPulseGroup = waitBox.gameObject.AddComponent<CanvasGroup>();
-            if (lobbyTcpConnected)
-                fonts.Draw(waitBox, "white_stroked_small", "PLAYER CONNECTED!", 160f, 398f, 11f, "center");
-            else if (lanTransport != null && lanTransport.IsHost)
-                fonts.Draw(waitBox, "white_stroked_small", "WAITING FOR PLAYER...", 160f, 398f, 11f, "center");
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "SHARE IP WITH OPPONENT", 160f, 269f, 9.5f, "center");
+                fonts.Draw(lobbyDynamicLayer, "white_small", $"IP {primaryIp} PORT {port}", 160f, 294f, 10.5f, "center", GameUi.Gold, 256f);
+                fonts.Draw(lobbyDynamicLayer, "white_small", secondaryLine, 160f, 316f, 9f, "center", new Color(0.84f, 0.88f, 1f, 0.9f), 256f);
+                fonts.Draw(lobbyDynamicLayer, "white_small", $"ROOM HOST: {LocalPlayerName()}", 160f, 338f, 9f, "center", null, 256f);
+            }
             else
-                fonts.Draw(waitBox, "red_stroked_small", "HOST SOCKET UNAVAILABLE", 160f, 398f, 10.5f, "center");
+            {
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "PORT BIND FAILED (41976-41985)", 160f, 276f, 9f, "center", null, 256f);
+                fonts.DrawLines(lobbyDynamicLayer, "white_small", "SWITCH TO JOIN ROOM OR TAP RETRY.",
+                    160f, 306f, 9.5f, 248f, 13f, "center", new Color(0.84f, 0.88f, 1f, 0.92f));
+                fonts.Draw(lobbyDynamicLayer, "white_small", $"ROOM HOST: {LocalPlayerName()}", 160f, 338f, 9f, "center", null, 256f);
+            }
+
+            if (lobbyTcpConnected)
+            {
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "PLAYER CONNECTED!", 160f, 398f, 11f, "center");
+            }
+            else if (hostReady)
+            {
+                var waitBox = GameUi.Box("HostWaitText", lobbyDynamicLayer, 0f, 0f, GameUi.Width, GameUi.Height);
+                lobbyWaitPulseGroup = waitBox.gameObject.AddComponent<CanvasGroup>();
+                fonts.Draw(waitBox, "white_stroked_small", "WAITING FOR PLAYER...", 160f, 398f, 11f, "center");
+            }
+            else
+            {
+                fonts.Draw(lobbyDynamicLayer, "red_stroked_small", "HOST SOCKET UNAVAILABLE", 160f, 398f, 10.5f, "center");
+            }
 
             string subLine = !string.IsNullOrEmpty(lobbyStatusMessage)
                 ? lobbyStatusMessage
                 : (lobbyTcpConnected ? "EXCHANGING TEAM DATA" : "BROADCASTING ROOM ON WI-FI LAN");
             fonts.DrawLines(lobbyDynamicLayer, "white_small", subLine, 160f, 424f, 9f, 252f, 12f, "center",
-                lobbyStatusIsError ? new Color(1f, 0.56f, 0.56f, 1f) : new Color(0.85f, 0.90f, 1f, 0.9f));
+                lobbyStatusIsError || !hostReady ? new Color(1f, 0.56f, 0.56f, 1f) : new Color(0.85f, 0.90f, 1f, 0.9f));
 
-            fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "CANCEL", 160f, 498f, 12f, "center");
-            ui.HitBox(lobbyDynamicLayer, 90f, 486f, 140f, 38f, () =>
+            if (showRetry)
             {
-                ui.Sound("screen_close", save);
-                CloseLanLobby();
-            });
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "RETRY", 89f, 498f, 12f, "center");
+                ui.HitBox(lobbyDynamicLayer, 24f, 486f, 130f, 38f, () =>
+                {
+                    ui.Sound("button_click", save);
+                    EnterHostMode();
+                });
+
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "CANCEL", 231f, 498f, 12f, "center");
+                ui.HitBox(lobbyDynamicLayer, 166f, 486f, 130f, 38f, () =>
+                {
+                    ui.Sound("screen_close", save);
+                    CloseLanLobby();
+                });
+            }
+            else
+            {
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "CANCEL", 160f, 498f, 12f, "center");
+                ui.HitBox(lobbyDynamicLayer, 90f, 486f, 140f, 38f, () =>
+                {
+                    ui.Sound("screen_close", save);
+                    CloseLanLobby();
+                });
+            }
         }
 
         private void SetHostRuleMode(string mode)
@@ -862,7 +909,20 @@ namespace Dynamons
 
             if (lobbyHostMode)
             {
-                EnterHostMode(preserveStatus: true);
+                bool wasHostSessionActive = lobbyTcpConnected || lobbyInReadyRoom || (lanTransport != null && lanTransport.IsHost);
+                if (wasHostSessionActive)
+                {
+                    EnterHostMode(preserveStatus: true);
+                    return;
+                }
+
+                lobbyConnecting = false;
+                lobbyTcpConnected = false;
+                sentLocalHello = false;
+                lobbyInReadyRoom = false;
+                lobbyStartingMatch = false;
+                remoteHello = null;
+                RenderHostLobby();
                 return;
             }
 

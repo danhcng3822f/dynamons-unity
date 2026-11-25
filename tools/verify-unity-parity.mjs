@@ -326,6 +326,10 @@ function checkFontDesignRulesAndDtoConstraints() {
       }
       assert.ok(!/(?:save\.Team\.(?:Add|Remove|Clear)|save\.Inventory\.(?:Add|Remove|Clear)|save\.(?:Take|Add)\(|save\.NodeId\s*=)/.test(txt),
         'PvpLobbyView.cs must keep SaveData Team/Inventory/NodeId strictly read-only');
+      const disconnectBody = extractBraceBlock(txt, /void\s+HandleLobbyPeerDisconnect\s*\([^)]*\)/);
+      assert.ok(disconnectBody !== null, 'PvpLobbyView.cs must define HandleLobbyPeerDisconnect()');
+      assert.ok(disconnectBody.includes('IsHost') && disconnectBody.includes('RenderHostLobby('),
+        'HandleLobbyPeerDisconnect() must guard EnterHostMode() with IsHost/active check and fall back to RenderHostLobby() without looping StartHost');
     }
     if (rel.endsWith('BattleView.cs')) {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
