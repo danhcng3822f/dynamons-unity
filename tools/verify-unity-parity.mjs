@@ -536,6 +536,10 @@ function checkFontDesignRulesAndDtoConstraints() {
   assert.ok(assetExists('general/enemies/lan_npc_avatar', ['.png']), 'Missing Assets/Resources/Dynamons/Art/general/enemies/lan_npc_avatar.png');
   assert.ok(assetExists('general/enemies/lan_npc_icon', ['.png']), 'Missing Assets/Resources/Dynamons/Art/general/enemies/lan_npc_icon.png');
 
+  const manifestTxt = readFileSync(join(unityDir, 'Packages', 'manifest.json'), 'utf8');
+  assert.ok(manifestTxt.includes('"com.unity.modules.androidjni"'),
+    'Packages/manifest.json must include com.unity.modules.androidjni for AndroidJavaObject MulticastLock and Wi-Fi IP resolution');
+
   const releaseWf = readFileSync(join(unityDir, '.github', 'workflows', 'build-release.yml'), 'utf8');
   assert.ok(/contents:\s*write/.test(releaseWf), 'build-release.yml must request contents: write for GitHub Releases');
   assert.ok(releaseWf.includes('gh release create') && releaseWf.includes('--latest'), 'build-release.yml must create a new versioned GitHub Release per build');
