@@ -11,14 +11,26 @@ namespace Dynamons
     public sealed partial class GameRoot
     {
         private const float MapMinX = -1035f;
+        private const float BoatCrossingDuration = 0.9f;
+        private static readonly Vector2 PierPos = new Vector2(206f, 468f);
+        private static readonly Vector2 PierBoatPos = new Vector2(214f, 478f);
+        private static readonly Vector2 LanIslandPos = new Vector2(348f, 486f);
+        private static readonly Vector2 IslandBoatPos = new Vector2(316f, 492f);
+        private static readonly Vector2 LanNpcPos = new Vector2(358f, 466f);
+        private static readonly Vector2 LanIslandAvatarPos = new Vector2(336f, 482f);
+        private static readonly Vector2 LanCameraFocus = new Vector2(280f, 460f);
+
         private readonly List<(RectTransform rt, float baseY)> mapMarkers = new List<(RectTransform, float)>();
-        private RectTransform mapLayer, mapAvatar, freeHealBox, mapTicketBadge;
+        private RectTransform mapLayer, mapAvatar, boatRect, lanNpcMarkerBox, lanHudLayer, freeHealBox, mapTicketBadge;
+        private VectorCanvas boatWakeVec;
         private RawImage arenaFlashImage;
         private MapDrag mapDrag;
         private Dictionary<int, Encounter> cachedMapRolls;
         private Coroutine walkRoutine;
         private float mapOffset, minOffset, arenaFlashTimer;
-        private bool walking;
+        private bool walking, traveling;
+        // Session flag intentionally survives ResetMapVisualRefs() / ShowMap() rebuilds; cleared on Splash(), Choose(), and island departure.
+        private bool onLanIsland;
         private Vector2 avatarLogicalPos;
         private int mapAdvance = 1;
 
@@ -27,6 +39,10 @@ namespace Dynamons
             mapMarkers.Clear();
             mapLayer = null;
             mapAvatar = null;
+            boatRect = null;
+            boatWakeVec = null;
+            lanNpcMarkerBox = null;
+            lanHudLayer = null;
             freeHealBox = null;
             mapTicketBadge = null;
             arenaFlashImage = null;
@@ -35,6 +51,7 @@ namespace Dynamons
             walkRoutine = null;
             arenaFlashTimer = 0f;
             walking = false;
+            traveling = false;
         }
 
         private void UpdateMapAnimations()
@@ -58,6 +75,8 @@ namespace Dynamons
         private void ShowMap()
         {
             walking = false;
+            traveling = false;
+            if (save.Team.Count == 0 || save.NodeId != 1) onLanIsland = false;
             if (save.Event.Sync(DateTime.Today)) Persist();
             if (save.Event.RewardPending) { ShowStarterReward(); return; }
             BeginPage(null); Track("music_map_loop");
@@ -80,16 +99,19 @@ namespace Dynamons
             GameUi.Fill(mapLayer, GameUi.HexColor("#56bcd4"), -75f, 0f, 1430f, GameUi.Height, true);
 
             RenderMapContents(mapLayer, rolls, visibility, true);
-            var rest = NodeAvatarPos(current, rolls);
+            var rest = onLanIsland ? LanIslandAvatarPos : NodeAvatarPos(current, rolls);
             avatarLogicalPos = rest;
             PlaceMapAvatar(rest.x, rest.y, 0f);
-            Pan(GameUi.Width * 0.5f - current.pos[0]);
+            float focusX = onLanIsland ? LanCameraFocus.x : current.pos[0];
+            Pan(GameUi.Width * 0.5f - focusX);
 
             HudWidgets.DrawTopHud(ui, fonts, data, save, page, false);
             HudWidgets.DrawMuteButton(ui, page, save, musicTrack, () => Persist(), null);
 
             DrawMapTopLeftControls();
             DrawMapBottomDock();
+            lanHudLayer = GameUi.Box("LanIslandHud", page, 0f, 0f, GameUi.Width, GameUi.Height);
+            RefreshLanIslandHud();
         }
 
         private void RenderMapBackdrop(Transform parent)
@@ -104,10 +126,25 @@ namespace Dynamons
             var backdrop = GameUi.Box("WorldBackdrop", parent, 0f, 0f, 1355f, GameUi.Height);
             GameUi.Fill(backdrop, GameUi.HexColor("#56bcd4"), -75f, 0f, 1430f, GameUi.Height);
             RenderMapContents(backdrop, rolls, visibility, false);
-            var rest = NodeAvatarPos(current, rolls);
+            var rest = onLanIsland ? LanIslandAvatarPos : NodeAvatarPos(current, rolls);
             var av = ui.Art(backdrop, "map/avatar", rest.x - 12.5f, rest.y - 30f, 25f, 30f, true);
             av.transform.SetAsLastSibling();
-            backdrop.anchoredPosition = new Vector2(Mathf.Clamp(GameUi.Width * 0.5f - current.pos[0], minOffset, 0f), 0f);
+            float focusX = onLanIsland ? LanCameraFocus.x : current.pos[0];
+            backdrop.anchoredPosition = new Vector2(Mathf.Clamp(GameUi.Width * 0.5f - focusX, minOffset, 0f), 0f);
+        }
+
+        private void DrawPathDots(Transform container, Vector2 from, Vector2 to, float alpha, int skipStart = 2, int skipEnd = 1, Color? tint = null)
+        {
+            float dx = to.x - from.x, dy = to.y - from.y;
+            float dist = Mathf.Sqrt(dx * dx + dy * dy);
+            int steps = Math.Max(3, Mathf.RoundToInt(dist / 13f));
+            for (int i = skipStart; i < steps - skipEnd; i++)
+            {
+                float t = i / (float)steps;
+                var dot = ui.Art(container, "map/path_dot", from.x + dx * t - 2.5f, from.y + dy * t - 2.5f, 5f, 5f, false, alpha);
+                if (tint.HasValue && dot != null)
+                    dot.color = new Color(tint.Value.r, tint.Value.g, tint.Value.b, alpha);
+            }
         }
 
         private void RenderMapContents(Transform container, Dictionary<int, Encounter> rolls, Visibility visibility, bool interactive)
@@ -128,16 +165,17 @@ namespace Dynamons
                 if (!visiblePacks.Contains(node.pack)) continue;
                 var parent = data.Node(node.connect);
                 if (parent == null || !visiblePacks.Contains(parent.pack)) continue;
-                float dx = node.pos[0] - parent.pos[0], dy = node.pos[1] - parent.pos[1];
-                float dist = Mathf.Sqrt(dx * dx + dy * dy);
-                int steps = Math.Max(3, Mathf.RoundToInt(dist / 13f));
                 bool unlocked = availableIds.Contains(node.id) && availableIds.Contains(parent.id);
-                float alpha = unlocked ? 0.95f : 0.3f;
-                for (int i = 2; i < steps - 1; i++)
-                {
-                    float t = i / (float)steps;
-                    ui.Art(container, "map/path_dot", parent.pos[0] + dx * t - 2.5f, parent.pos[1] + dy * t - 2.5f, 5f, 5f, false, alpha);
-                }
+                DrawPathDots(container, new Vector2(parent.pos[0], parent.pos[1]), new Vector2(node.pos[0], node.pos[1]), unlocked ? 0.95f : 0.3f);
+            }
+
+            if (save.Team.Count > 0)
+            {
+                var buoyTint = GameUi.HexColor("#d9f7ff");
+                var node1 = data.Node(1);
+                if (node1 != null)
+                    DrawPathDots(container, new Vector2(node1.pos[0], node1.pos[1]), PierPos, 0.82f, 2, 1, buoyTint);
+                DrawPathDots(container, PierPos, IslandBoatPos, 0.85f, 1, 1, buoyTint);
             }
 
             foreach (var node in data.mapNodes)
@@ -195,7 +233,52 @@ namespace Dynamons
                 {
                     float hitW = arena ? 104f : 52f, hitH = arena ? 72f : actionable ? 68f : 44f;
                     float hitY = arena ? y - 36f : actionable ? y - 48f : y - 22f;
-                    AttachNodeTapAndDrag(container, node, enc, x - hitW * 0.5f, hitY, hitW, hitH, arena);
+                    var targetNode = node;
+                    var targetEnc = enc;
+                    AttachMapTapAndDrag(container, x - hitW * 0.5f, hitY, hitW, hitH, () =>
+                    {
+                        if (arena) arenaFlashTimer = 0.14f;
+                        Travel(targetNode, targetEnc);
+                    });
+                }
+            }
+
+            if (save.Team.Count > 0)
+            {
+                ui.Art(container, "map/island_lan", LanIslandPos.x - 46f, LanIslandPos.y - 32f, 92f, 64f, true);
+                ui.Art(container, "general/enemies/lan_npc_avatar", LanNpcPos.x - 16f, LanNpcPos.y - 36f, 32f, 38f, true);
+
+                if (!onLanIsland || interactive)
+                {
+                    var markerContainer = GameUi.Box("LanNpcMarkerBox", container, 0f, 0f, 1355f, GameUi.Height);
+                    float markerY = LanNpcPos.y - 68f;
+                    var marker = ui.Art(markerContainer, "map/marker_battle", LanNpcPos.x - 14f, markerY, 28f, 32f, true);
+                    if (interactive)
+                    {
+                        lanNpcMarkerBox = markerContainer;
+                        mapMarkers.Add((marker.rectTransform, markerY));
+                    }
+
+                    float pillX = LanNpcPos.x - 16f, pillY = LanNpcPos.y - 80f;
+                    var lanPill = VectorCanvas.Create("LanNpcPill", markerContainer, pillX, pillY, 32f, 12f);
+                    lanPill.FillRoundRect(0f, 0f, 32f, 12f, 5f, GameUi.HexColor("#2b7cff"));
+                    lanPill.StrokeRoundRect(0f, 0f, 32f, 12f, 5f, GameUi.HexColor("#ffffff", 0.9f), 1f);
+                    lanPill.Commit();
+                    fonts.Draw(markerContainer, "white_stroked_small", "LAN", LanNpcPos.x, pillY + 2.5f, 8f, "center");
+                    if (interactive) markerContainer.gameObject.SetActive(!onLanIsland);
+                }
+
+                if (interactive)
+                    boatWakeVec = VectorCanvas.Create("BoatWake", container, 0f, 0f, 1355f, GameUi.Height);
+
+                var boatPos = onLanIsland ? IslandBoatPos : PierBoatPos;
+                var boatImg = ui.Art(container, "map/boat", boatPos.x - 17f, boatPos.y - 14f, 34f, 28f, true);
+                if (interactive)
+                {
+                    boatRect = boatImg.rectTransform;
+                    boatRect.pivot = new Vector2(0.5f, 0.5f);
+                    PlaceBoat(boatPos.x, boatPos.y, 0f, 0f);
+                    AttachMapTapAndDrag(container, 300f, 422f, 98f, 96f, SailToLanIsland);
                 }
             }
 
@@ -207,7 +290,7 @@ namespace Dynamons
             }
         }
 
-        private void AttachNodeTapAndDrag(Transform parent, MapNode node, Encounter enc, float x, float y, float w, float h, bool arena)
+        private void AttachMapTapAndDrag(Transform parent, float x, float y, float w, float h, Action onTap)
         {
             var hit = GameUi.Fill(parent, Color.clear, x, y, w, h, true);
             var trigger = hit.gameObject.AddComponent<EventTrigger>();
@@ -219,20 +302,19 @@ namespace Dynamons
                 trigger.triggers.Add(entry);
             }
 
-            bool nodeDragStarted = false;
-            Add(EventTriggerType.PointerDown, _ => nodeDragStarted = false);
-            Add(EventTriggerType.BeginDrag, pe => { nodeDragStarted = true; mapDrag?.OnBeginDrag(pe); });
+            bool dragStarted = false;
+            Add(EventTriggerType.PointerDown, _ => dragStarted = false);
+            Add(EventTriggerType.BeginDrag, pe => { dragStarted = true; mapDrag?.OnBeginDrag(pe); });
             Add(EventTriggerType.Drag, pe => mapDrag?.OnDrag(pe));
             Add(EventTriggerType.EndDrag, pe => mapDrag?.OnEndDrag(pe));
             Add(EventTriggerType.PointerClick, pe =>
             {
-                if (overlay != null || nodeDragStarted || pe.dragging || Vector2.Distance(pe.pressPosition, pe.position) > 10f)
+                if (overlay != null || dragStarted || pe.dragging || Vector2.Distance(pe.pressPosition, pe.position) > 10f)
                 {
-                    nodeDragStarted = false;
+                    dragStarted = false;
                     return;
                 }
-                if (arena) arenaFlashTimer = 0.14f;
-                Travel(node, enc);
+                onTap?.Invoke();
             });
         }
 
@@ -272,19 +354,45 @@ namespace Dynamons
         {
             ui.ArtButton(page, "map/btn_shop", 10f, GameUi.Height - 5f - 65f, 60f, 65f, () =>
             {
+                if (traveling) return;
                 ui.Sound("button_click", save);
                 ShowShop();
             }, true, 1f, "ShopBtn");
             ui.ArtButton(page, "map/btn_items", GameUi.Width - 10f - 120f, GameUi.Height - 5f - 65f, 60f, 65f, () =>
             {
+                if (traveling) return;
                 ui.Sound("button_click", save);
                 ShowInventory();
             }, true, 1f, "ItemsBtn");
             ui.ArtButton(page, "map/btn_team", GameUi.Width - 5f - 60f, GameUi.Height - 5f - 65f, 60f, 65f, () =>
             {
+                if (traveling) return;
                 ui.Sound("button_click", save);
                 ShowTeam();
             }, true, 1f, "TeamBtn");
+        }
+
+        private void RefreshLanIslandHud()
+        {
+            if (lanNpcMarkerBox != null) lanNpcMarkerBox.gameObject.SetActive(!onLanIsland);
+            if (lanHudLayer == null) return;
+            GameUi.Clear(lanHudLayer);
+            if (!onLanIsland || overlay != null) return;
+
+            const float px = 110f, py = GameUi.Height - 54f, pw = 100f, ph = 38f;
+            var pill = VectorCanvas.Create("LanVsHudPill", lanHudLayer, px, py, pw, ph);
+            pill.FillRoundRect(0f, 0f, pw, ph, 10f, GameUi.HexColor("#ffe259"));
+            pill.FillRoundRect(2f, 2f, pw - 4f, ph - 4f, 8f, GameUi.HexColor("#2b7cff"));
+            pill.FillRoundRect(4f, 4f, pw - 8f, 11f, 5f, new Color(1f, 1f, 1f, 0.22f));
+            pill.Commit();
+
+            fonts.Draw(lanHudLayer, "white_stroked_big", "LAN VS", px + pw * 0.5f, py + 12f, 13f, "center");
+            ui.HitBox(lanHudLayer, px, py, pw, ph, () =>
+            {
+                if (traveling || overlay != null || !onLanIsland) return;
+                ui.Sound("button_click", save);
+                OpenLanLobby();
+            });
         }
 
         private void RefreshTickets()
@@ -311,6 +419,47 @@ namespace Dynamons
             if (mapAvatar == null) return;
             mapAvatar.anchoredPosition = new Vector2(ax, -(ay + bob - 15f));
             mapAvatar.localEulerAngles = new Vector3(0f, 0f, -tiltDeg);
+        }
+
+        private void PlaceBoat(float bx, float by, float bob = 0f, float tiltDeg = 0f)
+        {
+            if (boatRect == null) return;
+            boatRect.anchoredPosition = new Vector2(bx, -(by + bob));
+            boatRect.localEulerAngles = new Vector3(0f, 0f, -tiltDeg);
+        }
+
+        private void DrawBoatWake(Vector2 boatPos, Vector2 dir, float elapsed)
+        {
+            if (boatWakeVec == null) return;
+            boatWakeVec.Clear();
+            Vector2 stern = boatPos - dir * 13f + new Vector2(0f, 6f);
+            Vector2 perp = new Vector2(-dir.y, dir.x);
+            for (int i = 0; i < 3; i++)
+            {
+                float phase = Mathf.Repeat(elapsed * 2.2f + i * 0.33f, 1f);
+                Vector2 center = stern - dir * (phase * 18f);
+                float rx = 4f + phase * 8.5f;
+                float ry = rx * 0.44f;
+                float alpha = (1f - phase) * 0.72f;
+                boatWakeVec.StrokeCircle(center.x, center.y, rx, new Color(1f, 1f, 1f, alpha), 1.5f, 0f, Mathf.PI * 2f, 14, ry);
+
+                float vSpread = 3f + phase * 6f;
+                var vPts = new[]
+                {
+                    stern - dir * (2f + phase * 10f) + perp * vSpread,
+                    stern - dir * (phase * 4f),
+                    stern - dir * (2f + phase * 10f) - perp * vSpread,
+                };
+                boatWakeVec.StrokePoly(vPts, new Color(0.88f, 0.98f, 1f, alpha * 0.7f), 1.3f, false);
+            }
+            boatWakeVec.Commit();
+        }
+
+        private void ClearBoatWake()
+        {
+            if (boatWakeVec == null) return;
+            boatWakeVec.Clear();
+            boatWakeVec.Commit();
         }
 
         private void Pan(float position)
@@ -356,32 +505,10 @@ namespace Dynamons
             return Array.Empty<int>();
         }
 
-        private void Travel(MapNode node, Encounter encounter)
+        private List<Vector2> BuildLandWaypoints(int[] path, Vector2 finalPos, bool includeFromNode, bool wasWalking)
         {
-            if (overlay != null || flow.World.Path(save, node.id).Length == 0) return;
-            var rolls = cachedMapRolls ?? flow.World.RollMap(save);
-            if (encounter == null) rolls.TryGetValue(node.id, out encounter);
-            encounter ??= new Encounter { Node = node };
-
-            bool wasWalking = walking;
-            if (walkRoutine != null) { StopCoroutine(walkRoutine); walkRoutine = null; }
-
-            var unlockedList = flow.World.Available(save).ToArray();
-            var unlocked = new HashSet<int>(unlockedList.Select(n => n.id)) { node.id };
-            int fromId = wasWalking ? NearestUnlockedNodeId(unlockedList) : save.NodeId;
-            unlocked.Add(fromId);
-
-            int[] path = FindVisualPath(unlocked, fromId, node.id);
-            Vector2 finalPos = NodeAvatarPos(node, rolls);
-
-            if ((!wasWalking && fromId == node.id) || Vector2.Distance(finalPos, avatarLogicalPos) < 2f || path.Length == 0)
-            {
-                ArriveAtNode(node, encounter, finalPos);
-                return;
-            }
-
             var waypoints = new List<Vector2>();
-            int startIdx = (wasWalking && path.Length > 1) ? 0 : 1;
+            int startIdx = includeFromNode ? 0 : 1;
             for (int i = startIdx; i < path.Length; i++)
             {
                 var wp = data.Node(path[i]);
@@ -395,18 +522,91 @@ namespace Dynamons
                 if (d0 < 8f || d1 < seg) waypoints.RemoveAt(0);
             }
             if (waypoints.Count == 0) waypoints.Add(finalPos);
+            return waypoints;
+        }
 
+        private void Travel(MapNode node, Encounter encounter)
+        {
+            if (overlay != null || traveling || flow.World.Path(save, node.id).Length == 0) return;
+            var rolls = cachedMapRolls ?? flow.World.RollMap(save);
+            if (encounter == null) rolls.TryGetValue(node.id, out encounter);
+            encounter ??= new Encounter { Node = node };
+
+            bool wasWalking = walking;
+            if (walkRoutine != null) { StopCoroutine(walkRoutine); walkRoutine = null; }
+
+            var unlockedList = flow.World.Available(save).ToArray();
+            var unlocked = new HashSet<int>(unlockedList.Select(n => n.id)) { node.id };
+            Vector2 finalPos = NodeAvatarPos(node, rolls);
+
+            if (onLanIsland)
+            {
+                onLanIsland = false;
+                RefreshLanIslandHud();
+                unlocked.Add(1);
+                int[] returnPath = FindVisualPath(unlocked, 1, node.id);
+                var returnWaypoints = returnPath.Length > 0
+                    ? BuildLandWaypoints(returnPath, finalPos, true, false)
+                    : new List<Vector2> { finalPos };
+                walkRoutine = StartCoroutine(SailFromIslandRoutine(node, encounter, finalPos, returnWaypoints));
+                return;
+            }
+
+            int fromId = wasWalking ? NearestUnlockedNodeId(unlockedList) : save.NodeId;
+            unlocked.Add(fromId);
+            int[] path = FindVisualPath(unlocked, fromId, node.id);
+
+            if ((!wasWalking && fromId == node.id) || Vector2.Distance(finalPos, avatarLogicalPos) < 2f || path.Length == 0)
+            {
+                ArriveAtNode(node, encounter, finalPos);
+                return;
+            }
+
+            var waypoints = BuildLandWaypoints(path, finalPos, wasWalking && path.Length > 1, wasWalking);
             walkRoutine = StartCoroutine(Walk(node, encounter, finalPos, waypoints));
         }
 
-        private IEnumerator Walk(MapNode node, Encounter encounter, Vector2 finalPos, List<Vector2> waypoints)
+        private void SailToLanIsland()
         {
-            walking = true;
+            if (overlay != null || traveling || save.Team.Count == 0) return;
+            if (onLanIsland)
+            {
+                ui.Sound("screen_open", save);
+                OpenLanNpcModal();
+                return;
+            }
+
+            bool wasWalking = walking;
+            if (walkRoutine != null) { StopCoroutine(walkRoutine); walkRoutine = null; }
+            walking = false;
+
+            var unlockedList = flow.World.Available(save).ToArray();
+            var unlocked = new HashSet<int>(unlockedList.Select(n => n.id)) { 1 };
+            int fromId = wasWalking ? NearestUnlockedNodeId(unlockedList) : save.NodeId;
+            unlocked.Add(fromId);
+
+            int[] path = FindVisualPath(unlocked, fromId, 1);
+            var node1 = data.Node(1);
+            Vector2 node1Pos = node1 != null ? new Vector2(node1.pos[0], node1.pos[1]) : PierPos;
+            var waypoints = new List<Vector2>();
+            if (path.Length > 0 && (wasWalking || fromId != 1))
+                waypoints = BuildLandWaypoints(path, node1Pos, wasWalking && path.Length > 1, wasWalking);
+
+            Vector2 lastPos = waypoints.Count > 0 ? waypoints[waypoints.Count - 1] : avatarLogicalPos;
+            if (Vector2.Distance(lastPos, PierPos) >= 2f)
+                waypoints.Add(PierPos);
+
+            walkRoutine = StartCoroutine(SailToIslandRoutine(waypoints));
+        }
+
+        private IEnumerator WalkAlongWaypoints(List<Vector2> waypoints)
+        {
             float walkClock = 0f;
             for (int i = 0; i < waypoints.Count; i++)
             {
                 Vector2 from = avatarLogicalPos, to = waypoints[i];
                 float dist = Vector2.Distance(from, to);
+                if (dist < 0.5f) continue;
                 float dur = Mathf.Clamp(dist * 0.0045f, 0.08f, 0.36f);
                 float elapsed = 0f;
                 while (elapsed < dur)
@@ -422,6 +622,79 @@ namespace Dynamons
                     yield return null;
                 }
             }
+        }
+
+        private IEnumerator AnimateBoatCrossing(Vector2 from, Vector2 to, float duration)
+        {
+            Vector2 delta = to - from;
+            Vector2 dir = delta.sqrMagnitude > 1e-4f ? delta.normalized : Vector2.right;
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                float p = Mathf.Clamp01(elapsed / duration);
+                float smooth = Mathf.SmoothStep(0f, 1f, p);
+                Vector2 pos = Vector2.Lerp(from, to, smooth);
+                float bob = Mathf.Sin(elapsed * 10f) * 2.4f;
+                float tilt = Mathf.Sin(elapsed * 7.5f) * 5.5f;
+                PlaceBoat(pos.x, pos.y, bob, tilt);
+                DrawBoatWake(pos, dir, elapsed);
+                yield return null;
+            }
+            ClearBoatWake();
+            PlaceBoat(to.x, to.y, 0f, 0f);
+        }
+
+        private IEnumerator CrossByBoat(Vector2 from, Vector2 to, Vector2 disembarkPos)
+        {
+            ui.Sound("attack_bubble_burst", save);
+            if (mapAvatar != null) mapAvatar.gameObject.SetActive(false);
+            yield return AnimateBoatCrossing(from, to, BoatCrossingDuration);
+            if (mapAvatar != null) mapAvatar.gameObject.SetActive(true);
+            avatarLogicalPos = disembarkPos;
+            PlaceMapAvatar(disembarkPos.x, disembarkPos.y, 0f, 0f);
+        }
+
+        private IEnumerator SailToIslandRoutine(List<Vector2> waypoints)
+        {
+            traveling = true;
+            walking = true;
+            if (waypoints.Count > 0)
+                yield return WalkAlongWaypoints(waypoints);
+
+            avatarLogicalPos = PierPos;
+            PlaceMapAvatar(PierPos.x, PierPos.y, 0f, 0f);
+            flow.MoveTo(1);
+            Persist();
+
+            yield return CrossByBoat(PierBoatPos, IslandBoatPos, LanIslandAvatarPos);
+
+            onLanIsland = true;
+            traveling = false;
+            walking = false;
+            walkRoutine = null;
+            RefreshLanIslandHud();
+            ui.Sound("screen_open", save);
+            OpenLanNpcModal();
+        }
+
+        private IEnumerator SailFromIslandRoutine(MapNode node, Encounter encounter, Vector2 finalPos, List<Vector2> waypoints)
+        {
+            traveling = true;
+            walking = true;
+
+            yield return CrossByBoat(IslandBoatPos, PierBoatPos, PierPos);
+
+            traveling = false;
+            yield return WalkAlongWaypoints(waypoints);
+            walkRoutine = null;
+            ArriveAtNode(node, encounter, finalPos);
+        }
+
+        private IEnumerator Walk(MapNode node, Encounter encounter, Vector2 finalPos, List<Vector2> waypoints)
+        {
+            walking = true;
+            yield return WalkAlongWaypoints(waypoints);
             walkRoutine = null;
             ArriveAtNode(node, encounter, finalPos);
         }
@@ -437,6 +710,48 @@ namespace Dynamons
             if (encounter.Kind == "wild") { BeginBattle(encounter); return; }
             ui.Sound("screen_open", save);
             OpenEnemyModal(node, encounter);
+        }
+
+        private void OpenLanNpcModal()
+        {
+            OpenOverlayShell(0.55f);
+            const float w = 276f, h = 230f;
+            float bx = (GameUi.Width - w) * 0.5f, by = (GameUi.Height - h) * 0.5f;
+
+            var card = VectorCanvas.Create("LanNpcCard", overlay, 0f, 0f, GameUi.Width, GameUi.Height);
+            card.FillRoundRect(bx, by, w, h, 14f, GameUi.HexColor("#e8b35a"));
+            card.FillRoundRect(bx + 3f, by + 3f, w - 6f, h - 6f, 12f, GameUi.HexColor("#231a38"));
+            card.FillRoundRect(bx + 14f, by + 14f, w - 28f, 74f, 10f, GameUi.HexColor("#312554"));
+            card.FillCircle(bx + 48f, by + 51f, 30f, GameUi.HexColor("#2b7cff", 0.35f), GameUi.HexColor("#2b7cff", 0f), 24);
+            card.FillRoundRect(bx + 84f, by + 56f, 92f, 18f, 6f, GameUi.HexColor("#2b7cff"));
+            card.FillRoundRect(bx + 18f, by + 98f, w - 36f, 60f, 10f, GameUi.HexColor("#f5f2ff"));
+            card.StrokeRoundRect(bx + 18f, by + 98f, w - 36f, 60f, 10f, GameUi.HexColor("#8f7ec4"), 1.5f);
+
+            const float btnW = 148f, btnH = 40f;
+            float btnX = bx + (w - btnW) * 0.5f, btnY = by + h - 56f;
+            card.FillRoundRect(btnX - 2f, btnY - 2f, btnW + 4f, btnH + 4f, 11f, GameUi.HexColor("#7be0ff"));
+            card.FillRoundRect(btnX, btnY, btnW, btnH, 10f, GameUi.HexColor("#2b7cff"));
+            card.FillRoundRect(btnX + 3f, btnY + 3f, btnW - 6f, 12f, 6f, new Color(1f, 1f, 1f, 0.22f));
+            card.Commit();
+
+            ui.Art(overlay, "general/enemies/lan_npc_icon", bx + 20f, by + 23f, 56f, 56f, true);
+            fonts.Draw(overlay, "white_stroked_big", "ISLAND DUELIST", bx + 84f, by + 32f, 14.5f, "left", null, 166f);
+            fonts.Draw(overlay, "white_stroked_small", "LOCAL WI-FI", bx + 130f, by + 60f, 8f, "center");
+            fonts.DrawLines(overlay, "black_small", "DUEL TRAINERS ON YOUR WI-FI!", bx + w * 0.5f, by + 114f, 11f, w - 58f, 15f, "center");
+            fonts.Draw(overlay, "white_stroked_big", "LAN VS", bx + w * 0.5f, btnY + 11f, 15f, "center");
+
+            ui.HitBox(overlay, btnX, btnY, btnW, btnH, () =>
+            {
+                ui.Sound("button_click", save);
+                CloseOverlay();
+                OpenLanLobby();
+            });
+
+            ui.ArtButton(overlay, "general/btn_close", bx + w - 24f, by - 14f, 40f, 40f, () =>
+            {
+                ui.Sound("screen_close", save);
+                CloseOverlay();
+            }, true, 1f, "LanModalCloseBtn");
         }
 
         private void OpenEnemyModal(MapNode node, Encounter encounter)

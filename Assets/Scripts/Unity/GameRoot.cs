@@ -54,6 +54,7 @@ namespace Dynamons
                 splashLogo.anchoredPosition = new Vector2(28f, -(12f + Mathf.Sin(Time.unscaledTime * 3f) * 2.5f));
             if (dialogTapHint != null)
                 dialogTapHint.alpha = 0.65f + 0.35f * Mathf.Sin(Time.unscaledTime * 6f);
+            UpdateLanNetworking();
             UpdateMapAnimations();
             UpdateBattleLoop();
             UpdateCollectionAnimations();
@@ -62,6 +63,33 @@ namespace Dynamons
             if (day == checkedDay) return;
             checkedDay = day;
             if (save.Event.Sync(day)) { Persist(); RefreshTickets(); }
+        }
+
+        private void OnDestroy() => ShutdownLanNetworking();
+
+        private void OnApplicationQuit() => ShutdownLanNetworking();
+
+        /// <summary>Opens the LAN PvP lobby overlay (replaced by PvpLobbyView in Task 6).</summary>
+        internal void OpenLanLobby()
+        {
+            Note("LAN LOBBY WILL OPEN HERE.");
+        }
+
+        /// <summary>Polls active LAN socket messages on the Unity main thread (wired in Task 6).</summary>
+        internal void UpdateLanNetworking()
+        {
+        }
+
+        /// <summary>Closes and disposes active LAN network resources safely on quit or teardown.</summary>
+        internal void ShutdownLanNetworking()
+        {
+        }
+
+        /// <summary>Rebuilds the map with the player standing beside the LAN Island NPC.</summary>
+        internal void ReturnToLanIsland()
+        {
+            onLanIsland = true;
+            ShowMap();
         }
 
         private bool Persist()
@@ -105,6 +133,7 @@ namespace Dynamons
             UnityEngine.EventSystems.EventSystem.current?.SetSelectedGameObject(null);
             overlay = GameUi.Box("Modal", ui.Frame, 0f, 0f, GameUi.Width, GameUi.Height);
             GameUi.Fill(overlay, new Color(0.035f, 0.02f, 0.078f, dimAlpha), 0f, 0f, GameUi.Width, GameUi.Height, true);
+            RefreshLanIslandHud();
         }
 
         private RectTransform OpenOverlay(string title, int height)
@@ -150,6 +179,7 @@ namespace Dynamons
                 var input = page.GetComponent<CanvasGroup>();
                 if (input != null) { input.interactable = true; input.blocksRaycasts = true; }
             }
+            RefreshLanIslandHud();
         }
 
         public void DrawMapStrips(Transform parent, float offsetX, bool cullToScreen = true)
@@ -167,6 +197,7 @@ namespace Dynamons
 
         private void Splash()
         {
+            onLanIsland = false;
             BeginPage(null); Track("music_map_loop");
             ui.Art(page, "splash/splash", 0f, -325f, 320f, 893f);
             splashLogo = ui.Art(page, "splash/logo", 28f, 12f, 264f, 136f, true).rectTransform;
@@ -179,6 +210,7 @@ namespace Dynamons
 
         private void Choose()
         {
+            onLanIsland = false;
             BeginPage(null); Track("music_map_loop");
             ui.Art(page, "map/bgs/bg1", -75f, 0f, 395f, 568f);
             GameUi.Fill(page, new Color(0f, 0f, 0f, 0.70f), 0f, 0f, GameUi.Width, GameUi.Height);

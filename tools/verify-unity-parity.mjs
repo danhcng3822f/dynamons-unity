@@ -215,6 +215,37 @@ function checkFxAndMegaTablesAgainstWeb() {
   }
 }
 
+function extractBraceBlock(txt, signatureRegex) {
+  const match = signatureRegex.exec(txt);
+  if (!match) return null;
+  let i = match.index + match[0].length;
+  while (i < txt.length && /\s/.test(txt[i])) i++;
+  if (txt.slice(i, i + 2) === '=>') {
+    const semi = txt.indexOf(';', i + 2);
+    return semi >= 0 ? txt.slice(i + 2, semi) : null;
+  }
+  if (txt[i] !== '{') return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let p = i; p < txt.length; p++) {
+    const ch = txt[p];
+    if (inString) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return txt.slice(i + 1, p);
+    }
+  }
+  return null;
+}
+
 function checkFontDesignRulesAndDtoConstraints() {
   const scriptFiles = walk(join(assetsDir, 'Scripts'), f => f.endsWith('.cs'));
   for (const file of scriptFiles) {
@@ -230,6 +261,46 @@ function checkFontDesignRulesAndDtoConstraints() {
     assert.ok(!/private void (Header|Settings)\(/.test(txt), `${rel}: Unused Header/Settings UI methods must not remain`);
     if (rel.endsWith('MapView.cs')) {
       assert.ok(!/mapUserDragged/.test(txt), 'MapView.cs must not pan camera automatically while walking');
+      for (const artRef of ['"map/island_lan"', '"map/boat"', '"general/enemies/lan_npc_avatar"', '"general/enemies/lan_npc_icon"']) {
+        assert.ok(txt.includes(artRef), `MapView.cs must reference ${artRef}`);
+      }
+      assert.ok(/\bbool\s+onLanIsland\b/.test(txt), 'MapView.cs must declare onLanIsland session flag');
+      const resetBody = extractBraceBlock(txt, /void\s+ResetMapVisualRefs\s*\(\s*\)/);
+      assert.ok(resetBody !== null, 'MapView.cs must define ResetMapVisualRefs()');
+      assert.ok(!/\bonLanIsland\s*=/.test(resetBody), 'ResetMapVisualRefs() must NOT reset onLanIsland so ShowMap() rebuild survives return-to-island');
+
+      const refreshHudBody = extractBraceBlock(txt, /void\s+RefreshLanIslandHud\s*\(\s*\)/);
+      assert.ok(refreshHudBody !== null, 'MapView.cs must define RefreshLanIslandHud()');
+      assert.ok(
+        /(!onLanIsland|onLanIsland\s*&&)/.test(refreshHudBody) && refreshHudBody.includes('overlay') && refreshHudBody.includes('"LAN VS"'),
+        'MapView.cs RefreshLanIslandHud() must gate persistent "LAN VS" pill strictly on onLanIsland && overlay == null',
+      );
+      assert.ok(!refreshHudBody.includes('"LAN VS"') || /if\s*\([^)]*!onLanIsland[^)]*\)\s*return\b/.test(refreshHudBody) || /if\s*\([^)]*onLanIsland[^)]*\)\s*\{[\s\S]*"LAN VS"/.test(refreshHudBody),
+        'MapView.cs must guard "LAN VS" pill behind onLanIsland check');
+
+      const travelBody = extractBraceBlock(txt, /void\s+Travel\s*\([^)]*\)/);
+      assert.ok(travelBody !== null && /onLanIsland\s*=\s*false/.test(travelBody), 'MapView.cs Travel() must clear onLanIsland when departing island');
+
+      const modalBody = extractBraceBlock(txt, /void\s+OpenLanNpcModal\s*\(\s*\)/);
+      assert.ok(modalBody !== null, 'MapView.cs must define OpenLanNpcModal()');
+      for (const expected of ['"general/enemies/lan_npc_icon"', '"ISLAND DUELIST"', '"DUEL TRAINERS ON YOUR WI-FI!"', '"LAN VS"', '"general/btn_close"', 'OpenLanLobby(']) {
+        assert.ok(modalBody.includes(expected), `OpenLanNpcModal() missing ${expected}`);
+      }
+    }
+    if (rel.endsWith('GameRoot.cs')) {
+      const updateBody = extractBraceBlock(txt, /void\s+Update\s*\(\s*\)/);
+      assert.ok(updateBody !== null && /UpdateLanNetworking\s*\(\s*\)/.test(updateBody), 'GameRoot.cs Update() must call UpdateLanNetworking()');
+      assert.ok(/\bvoid\s+UpdateLanNetworking\s*\(\s*\)/.test(txt), 'GameRoot.cs must define UpdateLanNetworking()');
+      assert.ok(/\bvoid\s+ShutdownLanNetworking\s*\(\s*\)/.test(txt), 'GameRoot.cs must define ShutdownLanNetworking()');
+      assert.ok(/\bvoid\s+OpenLanLobby\s*\(\s*\)/.test(txt), 'GameRoot.cs must define OpenLanLobby()');
+      const onDestroyBody = extractBraceBlock(txt, /void\s+OnDestroy\s*\(\s*\)/);
+      assert.ok(onDestroyBody !== null && /ShutdownLanNetworking\s*\(\s*\)/.test(onDestroyBody), 'GameRoot.cs OnDestroy() must call ShutdownLanNetworking()');
+      const onQuitBody = extractBraceBlock(txt, /void\s+OnApplicationQuit\s*\(\s*\)/);
+      assert.ok(onQuitBody !== null && /ShutdownLanNetworking\s*\(\s*\)/.test(onQuitBody), 'GameRoot.cs OnApplicationQuit() must call ShutdownLanNetworking()');
+      const splashBody = extractBraceBlock(txt, /void\s+Splash\s*\(\s*\)/);
+      const chooseBody = extractBraceBlock(txt, /void\s+Choose\s*\(\s*\)/);
+      assert.ok(splashBody !== null && /onLanIsland\s*=\s*false/.test(splashBody), 'GameRoot.cs Splash() must reset onLanIsland = false');
+      assert.ok(chooseBody !== null && /onLanIsland\s*=\s*false/.test(chooseBody), 'GameRoot.cs Choose() must reset onLanIsland = false');
     }
     if (rel.endsWith('BattleView.cs')) {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
