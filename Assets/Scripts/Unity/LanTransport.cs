@@ -371,6 +371,7 @@ namespace Dynamons
             while (incomingQueue.TryDequeue(out var raw))
             {
                 if (raw.Gen != activeGen) continue;
+                if (sawDisconnectedThisDrain) continue;
 
                 if (raw.Kind == RawKindConnected)
                 {
@@ -600,6 +601,8 @@ namespace Dynamons
             {
                 if (gen != Volatile.Read(ref sessionGen)) return;
                 isConnected = false;
+                isHost = false;
+                boundPort = 0;
                 Volatile.Write(ref beaconBytes, null);
                 DetachAndCloseSocketsLocked(out listenerToClose, out streamToClose, out clientToClose,
                     out udpHostToClose, out udpDiscToClose);

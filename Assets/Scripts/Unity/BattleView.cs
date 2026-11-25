@@ -88,6 +88,7 @@ namespace Dynamons
         private void ResetBattleState()
         {
             battleActive = false;
+            inPvpBattle = false;
             pvpActive = false;
             pvpHostAnimDone = false;
             pvpClientAnimDone = false;
@@ -653,7 +654,7 @@ namespace Dynamons
                 return;
             }
 
-            if (battleWaiting || !IsMyPvpInputTurn() || pvpSubmittedCurrentSeq) return;
+            if (battleWaiting || !IsMyPvpInputTurn() || pvpSubmittedCurrentSeq || pvpForfeitSent) return;
             if (action.Type == "catch") return;
             if (pvpPhase == "forced_switch" && action.Type != "switch") return;
 
@@ -728,9 +729,9 @@ namespace Dynamons
             GameUi.Clear(pvpBannerLayer);
             int secs = Mathf.CeilToInt(Mathf.Max(0f, pvpTurnTimer));
             pvpLastBannerSecond = secs;
-            if (battleWaiting || (IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq)) return;
+            if (battleWaiting || (IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq && !pvpForfeitSent)) return;
 
-            bool urgent = pvpTurnTimerOpen && secs <= 5;
+            bool urgent = !pvpForfeitSent && pvpTurnTimerOpen && secs <= 5;
             var vec = VectorCanvas.Create("PvpTurnBannerVec", pvpBannerLayer, 68f, GameUi.Height - 54f, 242f, 38f);
             vec.FillRoundRect(0f, 0f, 242f, 38f, 9f, GameUi.HexColor(urgent ? "#401220" : "#1f1636", 0.94f));
             vec.StrokeRoundRect(1f, 1f, 240f, 36f, 8f, GameUi.HexColor(urgent ? "#ff6b6b" : "#7be0ff", 0.95f), 1.5f);
@@ -1007,7 +1008,7 @@ namespace Dynamons
             if (ev.Type == "faint") LogBattleBanner("FAINTED!");
             else if (ev.Type == "catch") LogBattleBanner(ev.Success ? "CAUGHT!" : "IT BROKE FREE!");
             else if (ev.Type == "mega") LogBattleBanner("MEGA POWER UP 30%!");
-            else if (ev.Type == "escape") LogBattleBanner("GOT AWAY!");
+            else if (ev.Type == "escape") LogBattleBanner(pvpActive && !string.IsNullOrEmpty(ev.Text) ? ev.Text : "GOT AWAY!");
         }
 
         private void BattleClick(BattleAction action)
@@ -1068,7 +1069,7 @@ namespace Dynamons
             if (actor == null) return;
 
             bool interactive = pvpActive
-                ? (!battleWaiting && IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq)
+                ? (!battleWaiting && IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq && !pvpForfeitSent)
                 : !battleWaiting;
             bool allowItems = !pvpActive || (pvpStartMatch != null && pvpStartMatch.itemsAllowed);
 
@@ -1168,7 +1169,7 @@ namespace Dynamons
             if (megaActive || (megaReady && interactive))
                 rainbowTargets.Add((8f, 441f, 54f, 54f, 0f, megaActive));
 
-            if (pvpActive && !battleWaiting && (!IsMyPvpInputTurn() || pvpSubmittedCurrentSeq))
+            if (pvpActive && !battleWaiting && (!IsMyPvpInputTurn() || pvpSubmittedCurrentSeq || pvpForfeitSent))
             {
                 ui.ArtButton(controlsLayer, "session/ui/btn_escape", 5f, GameUi.Height - 64f, 55f, 60f,
                     () => SubmitBattleAction(new BattleAction("escape")), !pvpForfeitSent);
@@ -1234,7 +1235,7 @@ namespace Dynamons
         {
             if (pvpActive)
             {
-                if (battleWaiting || pvpPhase == "ended" || !IsMyPvpInputTurn() || pvpSubmittedCurrentSeq) return;
+                if (battleWaiting || pvpPhase == "ended" || !IsMyPvpInputTurn() || pvpSubmittedCurrentSeq || pvpForfeitSent) return;
                 if (pvpStartMatch == null || !pvpStartMatch.itemsAllowed) return;
                 ui.Sound("screen_open", save);
                 var actor = viewActivePlayer < viewPlayer.Count ? viewPlayer[viewActivePlayer] : null;
@@ -1277,7 +1278,7 @@ namespace Dynamons
             rainbowBorderVec.Clear();
 
             bool isSumsumBoss = battle != null && battle.Encounter.Kind == "boss" && battle.Encounter.Captain == "sumsum";
-            bool turnRingActive = pvpActive ? (IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq) : (battle != null && battle.Outcome == null);
+            bool turnRingActive = pvpActive ? (IsMyPvpInputTurn() && !pvpSubmittedCurrentSeq && !pvpForfeitSent) : (battle != null && battle.Outcome == null);
             BattleEvent activeEv = battleWaiting && battleEventIndex < battleEvents.Length ? battleEvents[battleEventIndex] : null;
 
             foreach (var side in new[] { "enemy", "player" })
@@ -2035,10 +2036,17 @@ namespace Dynamons
             }
             else
             {
-                bool filteredEmpty = !inBattle && pvpPouch == null && allOwned.Length > 0;
-                fonts.Draw(slotOverlay, "black_small", filteredEmpty ? "NO ITEMS IN THIS TAB" : "YOUR BAG IS EMPTY",
+                bool emptyPvp = pvpPouch != null;
+                bool filteredEmpty = !inBattle && !emptyPvp && allOwned.Length > 0;
+                string emptyTitle = emptyPvp
+                    ? "NO PVP ITEMS LEFT"
+                    : (filteredEmpty ? "NO ITEMS IN THIS TAB" : "YOUR BAG IS EMPTY");
+                string emptySub = emptyPvp
+                    ? "Your Battle Pouch is empty for this duel."
+                    : (filteredEmpty ? "Switch filter tab to view other items." : "Find items in battles and loot bags.");
+                fonts.Draw(slotOverlay, "black_small", emptyTitle,
                     GameUi.Width * 0.5f, bgY + 115f, 10.5f, "center");
-                fonts.Draw(slotOverlay, "white_small", filteredEmpty ? "Switch filter tab to view other items." : "Find items in battles and loot bags.",
+                fonts.Draw(slotOverlay, "white_small", emptySub,
                     GameUi.Width * 0.5f, bgY + 228f, 9f, "center");
             }
             slotOverlay.transform.SetAsLastSibling();

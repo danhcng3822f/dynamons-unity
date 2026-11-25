@@ -942,6 +942,7 @@ namespace Dynamons
                     hello.playerName = SanitizeDisplayName(hello.playerName, lobbyHostMode ? "RIVAL" : "HOST");
                     remoteHello = hello;
                     pvpRemoteHello = hello;
+                    pvpRemoteRematchRequested = false;
                     if (!sentLocalHello) SendLocalHello();
                     lobbyInReadyRoom = true;
                     lobbyConnecting = false;

@@ -277,6 +277,19 @@ function checkFontDesignRulesAndDtoConstraints() {
       );
       assert.ok(!refreshHudBody.includes('"LAN VS"') || /if\s*\([^)]*!onLanIsland[^)]*\)\s*return\b/.test(refreshHudBody) || /if\s*\([^)]*onLanIsland[^)]*\)\s*\{[\s\S]*"LAN VS"/.test(refreshHudBody),
         'MapView.cs must guard "LAN VS" pill behind onLanIsland check');
+      const pillDims = refreshHudBody.match(/const\s+float\s+px\s*=\s*(\d+(?:\.\d+)?)f\s*,\s*py\s*=\s*[^,]+,\s*pw\s*=\s*(\d+(?:\.\d+)?)f/);
+      assert.ok(pillDims !== null, 'MapView.cs RefreshLanIslandHud() must declare px and pw for LanVsHudPill');
+      const pillX = Number(pillDims[1]);
+      const pillW = Number(pillDims[2]);
+      assert.equal(pillX, 80, `MapView.cs LanVsHudPill px must be 80f (got ${pillX}f)`);
+      assert.ok(pillX >= 70 && pillX + pillW <= 190,
+        `MapView.cs LanVsHudPill (${pillX}..${pillX + pillW}) must not overlap ShopBtn (10..70) or ItemsBtn (190..250)`);
+
+      const topLeftBody = extractBraceBlock(txt, /void\s+DrawMapTopLeftControls\s*\(\s*\)/);
+      assert.ok(topLeftBody !== null, 'MapView.cs must define DrawMapTopLeftControls()');
+      const healBlock = topLeftBody.match(/ui\.ArtButton\(freeHealBox,[\s\S]*?"FreeHealBtn"\)/);
+      assert.ok(healBlock !== null && /if\s*\(\s*traveling\s*\)\s*return\s*;/.test(healBlock[0]),
+        'MapView.cs FreeHealBtn callback must guard with if (traveling) return;');
 
       const travelBody = extractBraceBlock(txt, /void\s+Travel\s*\([^)]*\)/);
       assert.ok(travelBody !== null && /onLanIsland\s*=\s*false/.test(travelBody), 'MapView.cs Travel() must clear onLanIsland when departing island');
@@ -331,6 +344,32 @@ function checkFontDesignRulesAndDtoConstraints() {
       assert.ok(disconnectBody !== null, 'PvpLobbyView.cs must define HandleLobbyPeerDisconnect()');
       assert.ok(disconnectBody.includes('IsHost') && disconnectBody.includes('RenderHostLobby('),
         'HandleLobbyPeerDisconnect() must guard EnterHostMode() with IsHost/active check and fall back to RenderHostLobby() without looping StartHost');
+      const lobbyMsgBody = extractBraceBlock(txt, /void\s+HandleLobbyNetMessage\s*\(\s*LanNetMessage\s+[^)]+\)/);
+      assert.ok(lobbyMsgBody !== null, 'PvpLobbyView.cs must define HandleLobbyNetMessage()');
+      const helloCaseBody = extractBraceBlock(lobbyMsgBody, /case\s+"hello"\s*:/);
+      assert.ok(helloCaseBody !== null && /pvpRemoteRematchRequested\s*=\s*false\s*;/.test(helloCaseBody),
+        'PvpLobbyView.cs HandleLobbyNetMessage() "hello" handshake must clear pvpRemoteRematchRequested = false');
+    }
+    if (rel.endsWith('LanTransport.cs')) {
+      const drainBody = extractBraceBlock(txt, /List<LanNetMessage>\s+DrainMainThreadMessages\s*\([^)]*\)/);
+      assert.ok(drainBody !== null, 'LanTransport.cs must define DrainMainThreadMessages()');
+      const dequeueBody = extractBraceBlock(drainBody, /while\s*\(\s*incomingQueue\.TryDequeue\([^)]*\)\s*\)/);
+      assert.ok(dequeueBody !== null, 'DrainMainThreadMessages() must drain incomingQueue');
+      const discIdx = dequeueBody.indexOf('RawKindDisconnected');
+      const skipIdx = dequeueBody.search(/if\s*\(\s*sawDisconnectedThisDrain\s*\)\s*continue\s*;/);
+      const connIdx = dequeueBody.indexOf('RawKindConnected');
+      const lineIdx = dequeueBody.indexOf('RawKindLine');
+      assert.ok(discIdx >= 0 && skipIdx >= 0 && connIdx > skipIdx && lineIdx > skipIdx,
+        'DrainMainThreadMessages() must skip trailing RawKindConnected/RawKindLine items after RawKindDisconnected in the same drain');
+
+      const closeDisconnectBody = extractBraceBlock(txt, /void\s+CloseSocketsForDisconnect\s*\([^)]*\)/);
+      assert.ok(closeDisconnectBody !== null, 'LanTransport.cs must define CloseSocketsForDisconnect()');
+      assert.ok(
+        /isConnected\s*=\s*false\s*;/.test(closeDisconnectBody) &&
+        /isHost\s*=\s*false\s*;/.test(closeDisconnectBody) &&
+        /boundPort\s*=\s*0\s*;/.test(closeDisconnectBody),
+        'CloseSocketsForDisconnect() must reset isConnected = false, isHost = false, and boundPort = 0',
+      );
     }
     if (rel.endsWith('BattleView.cs')) {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
@@ -369,6 +408,44 @@ function checkFontDesignRulesAndDtoConstraints() {
           'HasTerminalPvpResult() must inspect both pvpCurrentResult.phase == "ended" and pvpPendingQueue for phase == "ended"',
         );
       }
+
+      const resetBattleBody = extractBraceBlock(txt, /void\s+ResetBattleState\s*\(\s*\)/);
+      assert.ok(resetBattleBody !== null && /\binPvpBattle\s*=\s*false\s*;/.test(resetBattleBody),
+        'BattleView.cs ResetBattleState() must reset inPvpBattle = false');
+
+      const pvpClickBody = extractBraceBlock(txt, /void\s+PvpClick\s*\(\s*BattleAction\s+[^)]+\)/);
+      assert.ok(pvpClickBody !== null, 'BattleView.cs must define PvpClick(BattleAction)');
+      assert.ok(/if\s*\(\s*battleWaiting\s*\|\|\s*!IsMyPvpInputTurn\(\)\s*\|\|\s*pvpSubmittedCurrentSeq\s*\|\|\s*pvpForfeitSent\s*\)\s*return\s*;/.test(pvpClickBody),
+        'PvpClick() must block non-escape actions when pvpForfeitSent is true');
+
+      const refreshBannerBody = extractBraceBlock(txt, /void\s+RefreshPvpTurnBanner\s*\(\s*\)/);
+      assert.ok(refreshBannerBody !== null, 'BattleView.cs must define RefreshPvpTurnBanner()');
+      assert.ok(/!pvpSubmittedCurrentSeq\s*&&\s*!pvpForfeitSent/.test(refreshBannerBody),
+        'RefreshPvpTurnBanner() must not early-return when pvpForfeitSent is true so FORFEITING... banner renders');
+
+      const rebuildBody = extractBraceBlock(txt, /void\s+RebuildBattleControls\s*\(\s*\)/);
+      assert.ok(rebuildBody !== null, 'BattleView.cs must define RebuildBattleControls()');
+      assert.ok(
+        /IsMyPvpInputTurn\(\)\s*&&\s*!pvpSubmittedCurrentSeq\s*&&\s*!pvpForfeitSent/.test(rebuildBody) &&
+        /!IsMyPvpInputTurn\(\)\s*\|\|\s*pvpSubmittedCurrentSeq\s*\|\|\s*pvpForfeitSent/.test(rebuildBody),
+        'RebuildBattleControls() must gate interactive and PvP banner state on !pvpForfeitSent',
+      );
+
+      const pickerBody = extractBraceBlock(txt, /void\s+OpenBattleItemPicker\s*\(\s*\)/);
+      assert.ok(pickerBody !== null && /pvpSubmittedCurrentSeq\s*\|\|\s*pvpForfeitSent/.test(pickerBody),
+        'OpenBattleItemPicker() must guard against pvpForfeitSent');
+
+      const frameBody = extractBraceBlock(txt, /void\s+RenderDynamicBattleFrame\s*\(\s*\)/);
+      assert.ok(frameBody !== null && /turnRingActive\s*=[\s\S]*?!pvpSubmittedCurrentSeq\s*&&\s*!pvpForfeitSent/.test(frameBody),
+        'RenderDynamicBattleFrame() turnRingActive must exclude pvpForfeitSent');
+
+      const handleEvBody = extractBraceBlock(txt, /void\s+HandleBattleEvent\s*\(\s*BattleEvent\s+[^)]+\)/);
+      assert.ok(handleEvBody !== null && /ev\.Type\s*==\s*"escape"[\s\S]*pvpActive\s*&&\s*!string\.IsNullOrEmpty\(ev\.Text\)\s*\?\s*ev\.Text\s*:\s*"GOT AWAY!"/.test(handleEvBody),
+        'HandleBattleEvent() must display PvP forfeit text for escape events when pvpActive');
+
+      const itemsBody = extractBraceBlock(txt, /void\s+RenderItemsModalContents\s*\([^)]*\)/);
+      assert.ok(itemsBody !== null && itemsBody.includes('"NO PVP ITEMS LEFT"') && itemsBody.includes('"Your Battle Pouch is empty for this duel."'),
+        'RenderItemsModalContents() must show PvP-specific empty pouch wording');
     }
     if (rel.endsWith('CollectionView.cs')) {
       assert.ok(/\bvoid\s+ShowPvpResult\s*\(\s*string\s+[^)]+\)/.test(txt),
@@ -386,6 +463,8 @@ function checkFontDesignRulesAndDtoConstraints() {
         'ReturnToLanIsland()', 'IsConnected', 'COINS']) {
         assert.ok(renderPvpBody.includes(expected), `RenderPvpResultView() missing ${expected}`);
       }
+      assert.ok(/!lanTransport\.IsConnected\s*\)\s*\{[\s\S]*pvpRemoteRematchRequested\s*=\s*false\s*;/.test(renderPvpBody),
+        'RenderPvpResultView() disconnect fallback must reset pvpRemoteRematchRequested = false');
       assert.ok(!/(?:save\.Team\.(?:Add|Remove|RemoveAt|Clear|Insert|Sort)|save\.Team\[|save\.Inventory\.(?:Add|Remove|RemoveAt|Clear|Insert)|save\.(?:Take|Add)\(|save\.ClearedNodes\.(?:Add|Remove|Clear)|save\.NodeId\s*=)/.test(renderPvpBody),
         'RenderPvpResultView() must NEVER mutate save.Team, save.Inventory, save.ClearedNodes, or save.NodeId');
     }

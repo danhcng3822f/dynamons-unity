@@ -1298,6 +1298,7 @@ namespace Dynamons
                 {
                     if (lanTransport == null || !lanTransport.IsConnected)
                     {
+                        pvpRemoteRematchRequested = false;
                         pvpResultStatusNote = "OPPONENT DISCONNECTED";
                         RenderPvpResultView();
                         return;

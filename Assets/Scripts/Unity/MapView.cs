@@ -326,6 +326,7 @@ namespace Dynamons
             {
                 ui.ArtButton(freeHealBox, "team/btn_heal_small_kit", 6f, 4f, 80f, 40f, () =>
                 {
+                    if (traveling) return;
                     flow.HealAll();
                     PersistThen(() =>
                     {
@@ -379,7 +380,7 @@ namespace Dynamons
             GameUi.Clear(lanHudLayer);
             if (!onLanIsland || overlay != null) return;
 
-            const float px = 110f, py = GameUi.Height - 54f, pw = 100f, ph = 38f;
+            const float px = 80f, py = GameUi.Height - 54f, pw = 100f, ph = 38f;
             var pill = VectorCanvas.Create("LanVsHudPill", lanHudLayer, px, py, pw, ph);
             pill.FillRoundRect(0f, 0f, pw, ph, 10f, GameUi.HexColor("#ffe259"));
             pill.FillRoundRect(2f, 2f, pw - 4f, ph - 4f, 8f, GameUi.HexColor("#2b7cff"));
