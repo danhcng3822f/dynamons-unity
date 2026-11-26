@@ -113,8 +113,9 @@ jobs:
         run: |
           test -f build/Android/DynamonsNext.apk
           unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/arm64-v8a/libil2cpp.so'
+          unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/x86_64/libil2cpp.so'
           ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/armeabi-v7a/'
-          ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/x86'
+          ! unzip -l build/Android/DynamonsNext.apk | grep -q 'lib/x86/'
           python3 - <<'PY'
           import hashlib, os, struct, subprocess, zipfile
 
@@ -278,7 +279,7 @@ jobs:
           fi
           COMMIT_MSG=$(git log -1 --pretty=%s "$GITHUB_SHA" 2>/dev/null || echo "Automated build")
           TITLE="Dynamons Next ${TAG} (${GITHUB_SHA::7})"
-          NOTES=$(printf 'Automated IL2CPP builds for commit `%s`.\n\n- **Commit**: %s\n- **Android**: `DynamonsNext-android-arm64.apk` (arm64-v8a IL2CPP)\n- **Linux**: `DynamonsNext-linux-x64.tar.gz` (x64 IL2CPP)' "${GITHUB_SHA::7}" "$COMMIT_MSG")
+          NOTES=$(printf 'Automated IL2CPP builds for commit `%s`.\n\n- **Commit**: %s\n- **Android**: `DynamonsNext-android-arm64.apk` (arm64-v8a + x86_64 IL2CPP)\n- **Linux**: `DynamonsNext-linux-x64.tar.gz` (x64 IL2CPP)' "${GITHUB_SHA::7}" "$COMMIT_MSG")
           gh release create "$TAG" \
             DynamonsNext-android-arm64.apk \
             DynamonsNext-linux-x64.tar.gz \

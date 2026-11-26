@@ -50,8 +50,9 @@ namespace Dynamons
                 if (PlayerSettings.Android.bundleVersionCode < 1)
                     PlayerSettings.Android.bundleVersionCode = 1;
             }
-            if (PlayerSettings.Android.targetArchitectures != AndroidArchitecture.ARM64)
-                PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
+            var desiredArch = AndroidArchitecture.ARM64 | AndroidArchitecture.X86_64;
+            if (PlayerSettings.Android.targetArchitectures != desiredArch)
+                PlayerSettings.Android.targetArchitectures = desiredArch;
             PlayerSettings.Android.forceInternetPermission = true;
         }
 

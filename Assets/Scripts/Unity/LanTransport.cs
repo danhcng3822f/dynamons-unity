@@ -191,6 +191,7 @@ namespace Dynamons
             Volatile.Write(ref cachedNics, nics);
             BindAndroidProcessToWifiNetwork(null);
             AcquireAndroidMulticastLock();
+            Debug.Log($"[LanTransport] StartHost port={selectedPort} nics=[{string.Join(",", ExtractEndpointIps(nics, 8))}]");
 
             UpdateBeacon(initialBeacon ?? new LanBeaconDto());
 
@@ -259,6 +260,7 @@ namespace Dynamons
             Volatile.Write(ref cachedNics, nics);
             BindAndroidProcessToWifiNetwork(null);
             AcquireAndroidMulticastLock();
+            Debug.Log($"[LanTransport] StartDiscovery port={LanConst.DiscoveryPort} mcast={LanConst.DiscoveryMulticastIp} nics=[{string.Join(",", ExtractEndpointIps(nics, 8))}]");
 
             UdpClient udp = null;
             try
@@ -333,6 +335,9 @@ namespace Dynamons
 
                 string[] rankedIps = RankCandidateHostIps(pkt.RemoteIp, rawCandidates.ToArray(), localIps, localMasks);
                 if (rankedIps.Length == 0) continue;
+
+                if (existing == null)
+                    Debug.Log($"[LanTransport] Discovered room={key} hostIp={rankedIps[0]} port={dto.tcpPort} remoteIp={pkt.RemoteIp}");
 
                 bool isNewer = existing == null || pkt.SeenUtc >= existing.LastSeenUtc;
                 discoveredRooms[key] = new LanDiscoveredRoom
@@ -425,6 +430,7 @@ namespace Dynamons
             BindAndroidProcessToWifiNetwork(parsedPrimary);
 
             string[] candidates = candidateList.ToArray();
+            Debug.Log($"[LanTransport] ConnectDirect targets=[{string.Join(",", candidates)}] port={port} localNics=[{string.Join(",", ExtractEndpointIps(localNics, 8))}]");
             lock (stateLock)
             {
                 if (disposed || gen != sessionGen) return;
@@ -929,6 +935,7 @@ namespace Dynamons
                         tcpReaderThread = StartThread("LanTcpReader", () => TcpReaderLoop(gen, incoming, stream));
                         tcpWriterThread = StartThread("LanTcpWriter", () => TcpWriterLoop(gen, stream));
                     }
+                    Debug.Log("[LanTransport] TCP accepted peer");
                 }
             }
             catch (Exception)
@@ -1095,8 +1102,9 @@ namespace Dynamons
                     incomingQueue.Enqueue(new RawNetEvent { Gen = gen, Kind = RawKindConnected });
                     tcpReaderThread = StartThread("LanTcpReader", () => TcpReaderLoop(gen, client, stream));
                     tcpWriterThread = StartThread("LanTcpWriter", () => TcpWriterLoop(gen, stream));
-                    return true;
                 }
+                Debug.Log("[LanTransport] TCP connected (client)");
+                return true;
             }
             catch (Exception ex)
             {
@@ -1628,6 +1636,8 @@ namespace Dynamons
 
                 IntPtr bestNet = IntPtr.Zero;
                 int bestScore = int.MaxValue;
+                string bestIp = string.Empty;
+                string bestIfName = string.Empty;
                 try
                 {
                     ForEachAndroidConnectivityNetwork(connPtr, connCls, (netPtr, netRank, ip, mask, ifName) =>
@@ -1639,13 +1649,20 @@ namespace Dynamons
                         SafeDeleteLocalRef(ref bestNet);
                         bestNet = AndroidJNI.NewLocalRef(netPtr);
                         bestScore = score;
+                        bestIp = ip.ToString();
+                        bestIfName = ifName ?? string.Empty;
                     });
                     if (bestNet != IntPtr.Zero)
                     {
                         var arg = new jvalue[1];
                         arg[0].l = bestNet;
-                        if (SafeCallBooleanMethod(connPtr, midBind, arg))
-                            androidProcessNetworkBound = true;
+                        bool bound = SafeCallBooleanMethod(connPtr, midBind, arg);
+                        if (bound) androidProcessNetworkBound = true;
+                        Debug.Log($"[LanTransport] Android bindProcessToNetwork={bound} ip={bestIp} ifName={bestIfName}");
+                    }
+                    else
+                    {
+                        Debug.Log("[LanTransport] Android bindProcessToNetwork skipped (no Wi-Fi network found)");
                     }
                 }
                 finally
@@ -1803,6 +1820,7 @@ namespace Dynamons
                     lockObj.Call("setReferenceCounted", false);
                     lockObj.Call("acquire");
                     androidMulticastLock = lockObj;
+                    Debug.Log("[LanTransport] Android MulticastLock acquired");
                 }
             }
             catch (Exception ex)
