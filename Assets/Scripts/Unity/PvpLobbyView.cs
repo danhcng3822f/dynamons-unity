@@ -479,12 +479,20 @@ namespace Dynamons
             {
                 int port = lanTransport != null && lanTransport.BoundPort > 0 ? lanTransport.BoundPort : LanConst.BattlePortBase;
                 string[] ips = LanTransport.LocalIpv4Addresses();
-                string primaryIp = ips.Length > 0 ? ips[0] : "127.0.0.1";
-                string secondaryLine = ips.Length > 1 ? $"ALT {ips[1]}:{port}" : $"LOCALHOST 127.0.0.1:{port}";
 
                 fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "SHARE IP WITH OPPONENT", 160f, 269f, 9.5f, "center");
-                fonts.Draw(lobbyDynamicLayer, "white_small", $"IP {primaryIp} PORT {port}", 160f, 294f, 10.5f, "center", GameUi.Gold, 256f);
-                fonts.Draw(lobbyDynamicLayer, "white_small", secondaryLine, 160f, 316f, 9f, "center", new Color(0.84f, 0.88f, 1f, 0.9f), 256f);
+                if (ips.Length > 0)
+                {
+                    string primaryIp = ips[0];
+                    string secondaryLine = ips.Length > 1 ? $"ALT {ips[1]}:{port}" : "SHARE ON SAME WI-FI NETWORK";
+                    fonts.Draw(lobbyDynamicLayer, "white_small", $"IP {primaryIp} PORT {port}", 160f, 294f, 10.5f, "center", GameUi.Gold, 256f);
+                    fonts.Draw(lobbyDynamicLayer, "white_small", secondaryLine, 160f, 316f, 9f, "center", new Color(0.84f, 0.88f, 1f, 0.9f), 256f);
+                }
+                else
+                {
+                    fonts.Draw(lobbyDynamicLayer, "red_stroked_small", "NO WI-FI LAN IP FOUND", 160f, 294f, 10f, "center", null, 256f);
+                    fonts.Draw(lobbyDynamicLayer, "white_small", "CONNECT WI-FI OR DISABLE VPN", 160f, 316f, 8.5f, "center", new Color(1f, 0.65f, 0.65f, 0.95f), 256f);
+                }
                 fonts.Draw(lobbyDynamicLayer, "white_small", $"ROOM HOST: {LocalPlayerName()}", 160f, 338f, 9f, "center", null, 256f);
             }
             else
@@ -601,7 +609,7 @@ namespace Dynamons
             vec.Commit();
 
             fonts.Draw(lobbyManualJoinLayer, "white_stroked_small", "DIRECT IP CONNECT", 24f, 392f, 10f, "left");
-            lobbyIpInput = ui.TextField(lobbyManualJoinLayer, lastEnteredIp, "127.0.0.1:41976", 24f, 412f, 182f, 36f);
+            lobbyIpInput = ui.TextField(lobbyManualJoinLayer, lastEnteredIp, "192.168.1.10:41976", 24f, 412f, 182f, 36f);
             lobbyIpInput.onValueChanged.AddListener(val =>
             {
                 lastEnteredIp = val ?? string.Empty;
@@ -725,8 +733,8 @@ namespace Dynamons
                 vec.FillRoundRect(24f, ry, 272f, 52f, 9f, GameUi.HexColor("#2d2149"));
                 vec.StrokeRoundRect(24f, ry, 272f, 52f, 9f, GameUi.HexColor("#6b5e8a"), 1.3f);
 
-                vec.FillRoundRect(32f, ry + 29f, 68f, 16f, 5f, GameUi.HexColor(fair ? "#2b7cff" : "#c85a1c"));
-                vec.FillRoundRect(104f, ry + 29f, 62f, 16f, 5f, GameUi.HexColor(room.ItemsAllowed ? "#2b8a4e" : "#493f66"));
+                vec.FillRoundRect(32f, ry + 32f, 68f, 15f, 5f, GameUi.HexColor(fair ? "#2b7cff" : "#c85a1c"));
+                vec.FillRoundRect(104f, ry + 32f, 62f, 15f, 5f, GameUi.HexColor(room.ItemsAllowed ? "#2b8a4e" : "#493f66"));
 
                 vec.FillRoundRect(234f, ry + 10f, 54f, 32f, 7f, GameUi.HexColor(lobbyConnecting ? "#4b5a52" : "#2b8a4e"));
                 vec.StrokeRoundRect(234f, ry + 10f, 54f, 32f, 7f, GameUi.HexColor("#ffe259"), 1.2f);
@@ -741,12 +749,12 @@ namespace Dynamons
                 string hostLabel = SanitizeDisplayName(room.HostName, "HOST");
                 string monsLabel = room.TeamCount == 1 ? "1 MON" : $"{Math.Max(1, room.TeamCount)} MONS";
 
-                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", hostLabel, 32f, ry + 8f, 10.5f, "left", null, 134f);
-                fonts.Draw(lobbyDynamicLayer, "white_small", monsLabel, 224f, ry + 10f, 8.5f, "right", GameUi.Gold);
-                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", fair ? "FAIR LV 20" : "REAL TEAM", 66f, ry + 32f, 7.2f, "center", null, 62f);
-                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", room.ItemsAllowed ? "ITEMS ON" : "ITEMS OFF", 135f, ry + 32f, 7.2f, "center", null, 56f);
-                fonts.Draw(lobbyDynamicLayer, "white_small", $"{room.HostIp}:{room.TcpPort}", 170f, ry + 32f, 7.5f, "left",
-                    new Color(0.84f, 0.88f, 1f, 0.9f), 60f);
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", hostLabel, 32f, ry + 6f, 10.5f, "left", null, 134f);
+                fonts.Draw(lobbyDynamicLayer, "white_small", monsLabel, 224f, ry + 8f, 8.5f, "right", GameUi.Gold);
+                fonts.Draw(lobbyDynamicLayer, "white_small", $"{room.HostIp}:{room.TcpPort}", 32f, ry + 20f, 8f, "left",
+                    new Color(0.84f, 0.88f, 1f, 0.92f), 194f);
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", fair ? "FAIR LV 20" : "REAL TEAM", 66f, ry + 34f, 7f, "center", null, 62f);
+                fonts.Draw(lobbyDynamicLayer, "white_stroked_small", room.ItemsAllowed ? "ITEMS ON" : "ITEMS OFF", 135f, ry + 34f, 7f, "center", null, 56f);
 
                 fonts.Draw(lobbyDynamicLayer, "white_stroked_small", "JOIN", 261f, ry + 20f, 10f, "center",
                     lobbyConnecting ? new Color(1f, 1f, 1f, 0.55f) : Color.white);
@@ -764,7 +772,7 @@ namespace Dynamons
             if (lobbyIpInput != null) lobbyIpInput.text = lastEnteredIp;
             lobbyRuleMode = room.RuleMode == "real" ? "real" : "fair20";
             lobbyItemsAllowed = room.ItemsAllowed;
-            BeginClientConnect(room.HostIp, room.TcpPort);
+            BeginClientConnect(room.HostIp, room.TcpPort, room.CandidateIps);
         }
 
         private void OnManualConnectTapped()
@@ -784,7 +792,7 @@ namespace Dynamons
             BeginClientConnect(ip, port);
         }
 
-        private void BeginClientConnect(string ip, int port)
+        private void BeginClientConnect(string ip, int port, string[] fallbackIps = null)
         {
             lobbyConnecting = true;
             lobbyTcpConnected = false;
@@ -792,7 +800,7 @@ namespace Dynamons
             remoteHello = null;
             lobbyStatusIsError = false;
             lobbyStatusMessage = $"CONNECTING TO {ip}:{port}...";
-            EnsureLanTransport().ConnectDirect(ip, port);
+            EnsureLanTransport().ConnectDirect(ip, port, fallbackIps);
             RenderConnectStatus();
             RefreshDiscoveredRoomsIfChanged(true);
         }
@@ -1002,7 +1010,8 @@ namespace Dynamons
             string cleanReason = string.IsNullOrEmpty(reason) ? "DISCONNECTED" : reason;
             if (!lobbyHostMode && !lobbyInReadyRoom &&
                 (cleanReason.IndexOf("TIMED OUT", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                 cleanReason.IndexOf("TIMEOUT", StringComparison.OrdinalIgnoreCase) >= 0))
+                 cleanReason.IndexOf("TIMEOUT", StringComparison.OrdinalIgnoreCase) >= 0) &&
+                cleanReason.IndexOf("41976", StringComparison.Ordinal) < 0)
             {
                 cleanReason = "TIMED OUT. CHECK WI-FI, ALLOW PORT 41976, OR HOST ON ANDROID.";
             }
@@ -1217,7 +1226,7 @@ namespace Dynamons
             if (string.IsNullOrWhiteSpace(raw)) return fallback;
             var sb = new StringBuilder(raw.Length);
             bool prevSpace = true;
-            for (int i = 0; i < raw.Length && sb.Length < 78; i++)
+            for (int i = 0; i < raw.Length && sb.Length < 110; i++)
             {
                 char ch = char.ToUpperInvariant(raw[i]);
                 if (ch == '+' || ch == '&') ch = ' ';

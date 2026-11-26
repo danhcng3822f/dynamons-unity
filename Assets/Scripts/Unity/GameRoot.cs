@@ -22,6 +22,7 @@ namespace Dynamons
         private void Awake()
         {
             Application.targetFrameRate = 60;
+            Application.runInBackground = true;
             ui = new GameUi(gameObject);
             try
             {

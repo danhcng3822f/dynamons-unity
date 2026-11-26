@@ -30,6 +30,7 @@ namespace Dynamons
             PlayerSettings.SplashScreen.show = false;
             PlayerSettings.SplashScreen.showUnityLogo = false;
             PlayerSettings.defaultInterfaceOrientation = UIOrientation.Portrait;
+            PlayerSettings.runInBackground = true;
 
             ConfigureTarget(NamedBuildTarget.Standalone);
             ConfigureTarget(NamedBuildTarget.Android);

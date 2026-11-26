@@ -307,6 +307,9 @@ function checkFontDesignRulesAndDtoConstraints() {
         'GameUi.TextField() must style InputField text with LegacyRuntime.ttf at 13px');
     }
     if (rel.endsWith('GameRoot.cs')) {
+      const awakeBody = extractBraceBlock(txt, /void\s+Awake\s*\(\s*\)/);
+      assert.ok(awakeBody !== null && /Application\.runInBackground\s*=\s*true\s*;/.test(awakeBody),
+        'GameRoot.cs Awake() must set Application.runInBackground = true');
       const updateBody = extractBraceBlock(txt, /void\s+Update\s*\(\s*\)/);
       assert.ok(updateBody !== null && /UpdateLanNetworking\s*\(\s*\)/.test(updateBody), 'GameRoot.cs Update() must call UpdateLanNetworking()');
       assert.ok(!txt.includes('LAN LOBBY WILL OPEN HERE'), 'GameRoot.cs must not keep Task 5 OpenLanLobby stub');
@@ -351,6 +354,11 @@ function checkFontDesignRulesAndDtoConstraints() {
         'PvpLobbyView.cs HandleLobbyNetMessage() "hello" handshake must clear pvpRemoteRematchRequested = false');
       assert.ok(disconnectBody.includes('41976') && disconnectBody.includes('TIMED OUT'),
         'PvpLobbyView.cs HandleLobbyPeerDisconnect() must surface actionable firewall/host hint on timeout');
+      const renderHostBody = extractBraceBlock(txt, /void\s+RenderHostLobby\s*\(\s*\)/);
+      assert.ok(renderHostBody !== null && renderHostBody.includes('"NO WI-FI LAN IP FOUND"') && !renderHostBody.includes('"127.0.0.1"'),
+        'PvpLobbyView.cs RenderHostLobby() must report NO WI-FI LAN IP FOUND instead of falling back to 127.0.0.1');
+      assert.ok(txt.includes('"192.168.1.10:41976"') && !txt.includes('"127.0.0.1:41976"'),
+        'PvpLobbyView.cs BuildManualJoinSection() must use LAN example placeholder 192.168.1.10:41976 instead of 127.0.0.1:41976');
     }
     if (rel.endsWith('LanTransport.cs')) {
       const drainBody = extractBraceBlock(txt, /List<LanNetMessage>\s+DrainMainThreadMessages\s*\([^)]*\)/);
@@ -372,7 +380,14 @@ function checkFontDesignRulesAndDtoConstraints() {
         /boundPort\s*=\s*0\s*;/.test(closeDisconnectBody),
         'CloseSocketsForDisconnect() must reset isConnected, isHost, and boundPort',
       );
-      for (const pubHelper of ['PrefixLengthToMask', 'ComputeBroadcastIp', 'IsVirtualInterfaceName']) {
+      for (const pubHelper of [
+        'PrefixLengthToMask',
+        'ComputeBroadcastIp',
+        'IsVirtualInterfaceName',
+        'IsSameSubnet',
+        'RankCandidateHostIps',
+        'FormatSocketConnectError',
+      ]) {
         assert.ok(new RegExp(`public\\s+static\\s+\\S+\\s+${pubHelper}\\s*\\(`).test(txt),
           `LanTransport.cs ${pubHelper}() must be public static so Assembly-CSharp-Editor DynamonsChecks can invoke it`);
       }
@@ -381,22 +396,34 @@ function checkFontDesignRulesAndDtoConstraints() {
         'JoinMulticastGroup',
         'AcquireAndroidMulticastLock',
         'ReleaseAndroidMulticastLock',
+        'BindAndroidProcessToWifiNetwork',
+        'ClearAndroidProcessNetworkBinding',
         'CollectAndroidLanInterfaces',
+        'ProbeOutboundLanIpv4',
+        '()[Landroid/net/Network;',
+        'SocketOptionName.ReuseAddress',
         'ComputeBroadcastIp',
         'IsVirtualInterfaceName',
       ]) {
         assert.ok(txt.includes(expected), `LanTransport.cs missing LAN reliability helper: ${expected}`);
       }
+      assert.ok(!txt.includes('Call<AndroidJavaObject[]>("getAllNetworks")'),
+        'LanTransport.cs must invoke getAllNetworks via AndroidJNI with explicit signature instead of Call<AndroidJavaObject[]>');
+      const sendNicBody = extractBraceBlock(txt, /bool\s+SendBeaconOnNic\s*\([^)]*\)/);
+      assert.ok(sendNicBody !== null && !sendNicBody.includes('IPAddress.Broadcast'),
+        'LanTransport.cs SendBeaconOnNic() must not send global 255.255.255.255 from per-NIC sockets (prevents virtual source IP leakage)');
       for (const bgLoop of ['UdpBeaconLoop', 'UdpDiscoveryLoop', 'TcpAcceptLoop', 'TcpConnectLoop', 'TcpReaderLoop', 'TcpWriterLoop']) {
         const bgBody = extractBraceBlock(txt, new RegExp(`void\\s+${bgLoop}\\s*\\([^)]*\\)`));
         assert.ok(bgBody !== null, `LanTransport.cs must define ${bgLoop}()`);
-        assert.ok(!/AndroidJava|ConnectivityManager|MulticastLock|JsonUtility/.test(bgBody),
+        assert.ok(!/AndroidJava|AndroidJNI|ConnectivityManager|MulticastLock|JsonUtility/.test(bgBody),
           `LanTransport.cs ${bgLoop}() must never touch Unity JNI or JsonUtility on a background thread`);
       }
     }
     if (rel.endsWith('LanProtocol.cs')) {
       assert.ok(txt.includes('DiscoveryMulticastIp = "239.255.41.75"'),
         'LanProtocol.cs must define LanConst.DiscoveryMulticastIp');
+      assert.ok(txt.includes('public string[] hostIps;'),
+        'LanProtocol.cs LanBeaconDto must expose public string[] hostIps for multi-IP failover');
     }
     if (rel.endsWith('BattleView.cs')) {
       assert.ok(txt.includes('HudWidgets.DrawTopHud(ui, fonts, data, save, topHudLayer'), 'BattleView.cs must draw TopHud on topHudLayer above veilLayer');
@@ -507,6 +534,7 @@ function checkFontDesignRulesAndDtoConstraints() {
   assert.ok(buildSettingsTxt.includes('PlayerSettings.productName = "Dynamons Next"'), 'DynamonsBuildSettings.cs must set productName = "Dynamons Next" unconditionally');
   assert.ok(buildSettingsTxt.includes('SetApplicationIdentifier(NamedBuildTarget.Android, "com.dynamons.game")'), 'DynamonsBuildSettings.cs must set Android applicationIdentifier to com.dynamons.game');
   assert.ok(buildSettingsTxt.includes('PlayerSettings.SplashScreen.show = false'), 'DynamonsBuildSettings.cs must disable Unity SplashScreen');
+  assert.ok(buildSettingsTxt.includes('PlayerSettings.runInBackground = true;'), 'DynamonsBuildSettings.cs must enable PlayerSettings.runInBackground');
   assert.ok(buildSettingsTxt.includes('PlayerSettings.Android.forceInternetPermission = true'), 'DynamonsBuildSettings.cs must set PlayerSettings.Android.forceInternetPermission = true');
 
   const outsideAndroidGuard = buildSettingsTxt.replace(/#if\s+UNITY_ANDROID[\s\S]*?#endif/g, '');

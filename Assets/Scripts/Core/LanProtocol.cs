@@ -34,6 +34,7 @@ namespace Dynamons
         public bool itemsAllowed;
         public int tcpPort;
         public int teamCount;
+        public string[] hostIps;
     }
 
     [Serializable]

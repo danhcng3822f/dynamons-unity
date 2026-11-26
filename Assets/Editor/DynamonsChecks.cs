@@ -605,14 +605,17 @@ namespace Dynamons
                 ruleMode = "fair20",
                 itemsAllowed = true,
                 tcpPort = LanConst.BattlePortBase,
-                teamCount = 3
+                teamCount = 3,
+                hostIps = new[] { "192.168.1.10", "10.0.0.5" }
             });
             var decodedBeacon = LanCodec.Decode<LanBeaconDto>(beaconJson);
             Check(decodedBeacon != null && decodedBeacon.protocolVersion == LanConst.ProtocolVersion &&
                   decodedBeacon.roomId == "room-1" && decodedBeacon.hostName == "HOST" &&
                   decodedBeacon.ruleMode == "fair20" && decodedBeacon.itemsAllowed &&
-                  decodedBeacon.tcpPort == LanConst.BattlePortBase && decodedBeacon.teamCount == 3,
-                "LanBeaconDto round-trips cleanly via JsonUtility/LanCodec");
+                  decodedBeacon.tcpPort == LanConst.BattlePortBase && decodedBeacon.teamCount == 3 &&
+                  decodedBeacon.hostIps != null && decodedBeacon.hostIps.Length == 2 &&
+                  decodedBeacon.hostIps[0] == "192.168.1.10" && decodedBeacon.hostIps[1] == "10.0.0.5",
+                "LanBeaconDto round-trips cleanly via JsonUtility/LanCodec including hostIps");
 
             string pingWire = LanCodec.Encode("ping", new LanPingDto { ts = 424242L });
             var pingEnv = LanCodec.Decode<LanWireEnvelope>(pingWire);
@@ -637,9 +640,37 @@ namespace Dynamons
                 "LanTransport.ComputeBroadcastIp handles directed masks and /24 fallback");
             Check(LanTransport.IsVirtualInterfaceName("docker0") &&
                   LanTransport.IsVirtualInterfaceName("virbr0") &&
+                  LanTransport.IsVirtualInterfaceName("waydroid0") &&
+                  LanTransport.IsVirtualInterfaceName("lxdbr0") &&
+                  LanTransport.IsVirtualInterfaceName("v4-rmnet_data0") &&
+                  LanTransport.IsVirtualInterfaceName("r_rmnet_data0") &&
+                  LanTransport.IsVirtualInterfaceName("p2p-wlan0-0") &&
+                  LanTransport.IsVirtualInterfaceName("CloudflareWARP") &&
+                  LanTransport.IsVirtualInterfaceName("utun0") &&
+                  LanTransport.IsVirtualInterfaceName("dummy0") &&
+                  LanTransport.IsVirtualInterfaceName("clat4") &&
                   !LanTransport.IsVirtualInterfaceName("wlan0") &&
-                  !LanTransport.IsVirtualInterfaceName("wlp3s0"),
-                "LanTransport.IsVirtualInterfaceName distinguishes virtual bridges from physical Wi-Fi");
+                  !LanTransport.IsVirtualInterfaceName("wlp3s0") &&
+                  !LanTransport.IsVirtualInterfaceName("eth0") &&
+                  !LanTransport.IsVirtualInterfaceName("enp0s31f6") &&
+                  !LanTransport.IsVirtualInterfaceName("ap0") &&
+                  !LanTransport.IsVirtualInterfaceName("swlan0"),
+                "LanTransport.IsVirtualInterfaceName distinguishes virtual/VPN/464XLAT interfaces from physical LAN/Wi-Fi");
+            Check(LanTransport.IsSameSubnet(System.Net.IPAddress.Parse("192.168.1.10"), System.Net.IPAddress.Parse("192.168.1.55"), System.Net.IPAddress.Parse("255.255.255.0")) &&
+                  !LanTransport.IsSameSubnet(System.Net.IPAddress.Parse("192.168.1.10"), System.Net.IPAddress.Parse("172.17.0.1"), System.Net.IPAddress.Parse("255.255.255.0")),
+                "LanTransport.IsSameSubnet accurately compares IPv4 networks");
+            var ranked = LanTransport.RankCandidateHostIps(
+                "172.17.0.1",
+                new[] { "172.17.0.1", "192.168.1.10", "172.17.0.1", "127.0.0.1" },
+                new[] { "192.168.1.55" },
+                new[] { "255.255.255.0" });
+            Check(ranked != null && ranked.Length == 2 && ranked[0] == "192.168.1.10" && ranked[1] == "172.17.0.1",
+                "LanTransport.RankCandidateHostIps puts same-subnet IP first, filters loopback, and deduplicates");
+            string err113 = LanTransport.FormatSocketConnectError("192.168.1.10", 41976, System.Net.Sockets.SocketError.HostUnreachable, 113, "mono-io-layer-error (113)");
+            string err111 = LanTransport.FormatSocketConnectError("192.168.1.10", 41976, System.Net.Sockets.SocketError.ConnectionRefused, 111, "Connection refused");
+            Check(err113.IndexOf("No route", StringComparison.OrdinalIgnoreCase) >= 0 && err113.Contains("192.168.1.10:41976") && err113.Contains("113") &&
+                  err111.IndexOf("Connection refused", StringComparison.OrdinalIgnoreCase) >= 0 && err111.Contains("192.168.1.10:41976"),
+                "LanTransport.FormatSocketConnectError translates errno 113 and 111 into clear diagnostics");
 
             var dummyRoom = new LanDiscoveredRoom
             {
